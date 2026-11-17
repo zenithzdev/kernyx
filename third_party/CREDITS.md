@@ -5,7 +5,7 @@ locations. This file provides a single consolidated view.
 
 ## KERNYX
 
-- Maintainer/Packager: zenithz.dev
+- Maintainer/Packager: KERNYX Contributors
 
 ## btop
 

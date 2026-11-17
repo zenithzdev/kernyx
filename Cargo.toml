@@ -2,7 +2,7 @@
 name = "kernyx"
 version = "2.0.0"
 edition = "2021"
-authors = ["Zenithz Dev"]
+authors = ["Kernyx Contributors"]
 description = "Adaptive Linux Performance Optimization Engine"
 license = "MIT"
 repository = "https://github.com/zenithzcloud/kernyx"
