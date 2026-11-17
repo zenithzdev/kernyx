@@ -1,0 +1,191 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag, e.g. v2.0.0'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  REPO_OWNER: zenithzdev
+  SRC_REPO: kernyx
+  APT_REPO: kernyx-apt
+  PKG_NAME: kernyx
+  FINGERPRINT: 864FE821DCAF96A4B8F9F71EFB1D9A2606C3F536
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate version
+        run: |
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          echo "VERSION=${VERSION#v}" >> "$GITHUB_ENV"
+          [[ "$VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid version: $VERSION"; exit 1; }
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --check
+      - run: cargo clippy -- -D warnings
+      - run: cargo test
+
+  build:
+    needs: validate
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ cmake make pkg-config libssl-dev \
+            build-essential curl ca-certificates
+      - name: Build Rust binary
+        run: cargo build --release
+      - name: Build bundled tools from source
+        run: |
+          set -e
+          mkdir -p /tmp/bundled
+          # btop
+          git clone --depth 1 https://github.com/aristocratos/btop.git /tmp/bundled/btop
+          make -C /tmp/bundled/btop -j"$(nproc)"
+          cp /tmp/bundled/btop/bin/btop /tmp/bundled/kernyx-monitor
+          # fastfetch
+          git clone --depth 1 https://github.com/fastfetch-cli/fastfetch.git /tmp/bundled/fastfetch
+          cmake -S /tmp/bundled/fastfetch -B /tmp/bundled/fastfetch/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/bundled/fastfetch/build -j"$(nproc)"
+          cp /tmp/bundled/fastfetch/build/fastfetch /tmp/bundled/kernyx-fetch
+          # hyperfine
+          git clone --depth 1 https://github.com/sharkdp/hyperfine.git /tmp/bundled/hyperfine
+          cargo build --release --manifest-path /tmp/bundled/hyperfine/Cargo.toml
+          cp /tmp/bundled/hyperfine/target/release/hyperfine /tmp/bundled/kernyx-bench
+          chmod 755 /tmp/bundled/kernyx-*
+      - name: Build .deb
+        run: |
+          set -e
+          V="${{ env.VERSION }}"
+          ARCH="${{ matrix.arch }}"
+          STAGE=$(mktemp -d)
+          mkdir -p "$STAGE/DEBIAN" "$STAGE/usr/bin" "$STAGE/usr/lib/kernyx" \
+                   "$STAGE/etc/kernyx" "$STAGE/var/lib/kernyx" "$STAGE/var/log/kernyx"
+          cp target/release/kernyx "$STAGE/usr/bin/kernyx"
+          chmod 755 "$STAGE/usr/bin/kernyx"
+          cp /tmp/bundled/kernyx-monitor /tmp/bundled/kernyx-fetch /tmp/bundled/kernyx-bench "$STAGE/usr/lib/kernyx/"
+          chmod 755 "$STAGE/usr/lib/kernyx/"*
+          cp etc/btop.conf "$STAGE/etc/kernyx/btop.conf"
+          mkdir -p "$STAGE/usr/share/doc/kernyx"
+          cp vendor/btop/LICENSE "$STAGE/usr/share/doc/kernyx/btop-LICENSE"
+          cp third_party/fastfetch/LICENSE "$STAGE/usr/share/doc/kernyx/fastfetch-LICENSE"
+          cp third_party/hyperfine-LICENSE-MIT third_party/hyperfine-LICENSE-APACHE "$STAGE/usr/share/doc/kernyx/"
+          cat > "$STAGE/DEBIAN/control" <<EOF
+          Package: kernyx
+          Version: $V
+          Section: admin
+          Priority: optional
+          Architecture: $ARCH
+          Maintainer: Kernyx Contributors
+          Description: Adaptive Linux Performance Optimization Engine
+           KERNYX detects hardware, analyzes the system, calculates appropriate
+           kernel-level optimizations, applies authorized changes transactionally,
+           verifies results and supports rollback. Includes btop, fastfetch and hyperfine.
+          EOF
+          dpkg-deb --build "$STAGE" "kernyx_${V}_${ARCH}.deb"
+          dpkg-deb --info "kernyx_${V}_${ARCH}.deb"
+          sha256sum "kernyx_${V}_${ARCH}.deb" > "kernyx_${V}_${ARCH}.deb.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kernyx-${{ matrix.arch }}
+          path: |
+            kernyx_*.deb
+            kernyx_*.deb.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Verify checksums
+        run: |
+          find artifacts -name '*.deb.sha256' -exec sha256sum -c {} \;
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+
+  pages:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Import signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.KERNYX_GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --list-secret-keys --with-colons | grep '^sec' || exit 1
+      - name: Generate APT repository metadata
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y apt-utils
+          VERSION="${{ env.VERSION }}"
+          REPO=$(mktemp -d)
+          mkdir -p "$REPO/pool/main" "$REPO/dists/stable/main/binary-amd64" \
+                   "$REPO/dists/stable/main/binary-arm64"
+          find artifacts -name '*.deb' -exec cp {} "$REPO/pool/main/" \;
+          dpkg-scanpackages "$REPO/pool/main" /dev/null > "$REPO/dists/stable/main/binary-amd64/Packages"
+          cp "$REPO/dists/stable/main/binary-amd64/Packages" "$REPO/dists/stable/main/binary-arm64/Packages"
+          gzip -kf "$REPO"/dists/stable/main/binary*/Packages
+          {
+            printf 'Origin: Kernyx\nLabel: Kernyx\nSuite: stable\nCodename: stable\n'
+            printf 'Architectures: amd64 arm64\nComponents: main\nDescription: KERNYX APT Repository\n'
+            apt-ftparchive release "$REPO/dists/stable"
+          } > "$REPO/dists/stable/Release"
+          gpg --batch --yes --default-key "$FINGERPRINT" --clearsign \
+              --output "$REPO/dists/stable/InRelease" "$REPO/dists/stable/Release"
+          gpg --batch --yes --default-key "$FINGERPRINT" -abs \
+              --output "$REPO/dists/stable/Release.gpg" "$REPO/dists/stable/Release"
+          gpg --armor --export "$FINGERPRINT" > "$REPO/kernyx.asc"
+          cp install.sh "$REPO/install.sh"
+          chmod 755 "$REPO/install.sh"
+          echo "$REPO" > /tmp/repo_path
+      - name: Verify signatures
+        run: |
+          REPO=$(cat /tmp/repo_path)
+          gpg --verify "$REPO/dists/stable/InRelease"
+      - name: Deploy to GitHub Pages repository
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.KERNYX_APT_TOKEN }}
+          external_repository: ${{ env.REPO_OWNER }}/${{ env.APT_REPO }}
+          publish_branch: main
+          publish_dir: $(cat /tmp/repo_path)
+          keep_files: true
+          commit_message: "Release ${{ env.VERSION }}"
+      - name: Verify published repository
+        run: |
+          sleep 30
+          curl -fsSL "https://${{ env.REPO_OWNER }}.github.io/${{ env.APT_REPO }}/dists/stable/InRelease" | grep -q 'Suite: stable'
+          curl -fsSL "https://${{ env.REPO_OWNER }}.github.io/${{ env.APT_REPO }}/install.sh" | grep -q 'KERNYX'
