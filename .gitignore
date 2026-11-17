@@ -1,0 +1,18 @@
+# Rust build artifacts
+target/
+
+# Debian packages and build staging
+dist/
+*.deb
+
+# Temporary files
+*.tmp
+*.log
+/tmp/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

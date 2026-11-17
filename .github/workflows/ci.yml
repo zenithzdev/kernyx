@@ -1,0 +1,47 @@
+name: KERNYX CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+      - name: Tests
+        run: cargo test
+      - name: Release build
+        run: cargo build --release
+      - name: Package
+        run: |
+          mkdir -p dist
+          STAGE=$(mktemp -d)
+          mkdir -p "$STAGE/DEBIAN" "$STAGE/usr/bin" "$STAGE/etc/kernyx" "$STAGE/var/lib/kernyx" "$STAGE/var/log/kernyx"
+          cp target/release/kernyx "$STAGE/usr/bin/kernyx"
+          chmod 755 "$STAGE/usr/bin/kernyx"
+          cat > "$STAGE/DEBIAN/control" <<EOF
+          Package: kernyx
+          Version: ${{ github.ref_name }}
+          Section: admin
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Zenithz Dev
+          Description: Adaptive Linux Performance Optimization Engine
+           KERNYX detects hardware, analyzes the system and applies
+           safe kernel-level optimizations transactionally.
+          EOF
+          dpkg-deb --build "$STAGE" "dist/kernyx_${{ github.ref_name }}_amd64.deb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kernyx-deb
+          path: dist/*.deb
