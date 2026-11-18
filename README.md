@@ -40,7 +40,7 @@ cloud environment.
 ### First time — one command
 
 ```bash
-curl -fsSL https://zenithzdev.github.io/kernyx/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/zenithzdev/kernyx/main/install.sh | sudo bash
 ```
 
 The installer:
