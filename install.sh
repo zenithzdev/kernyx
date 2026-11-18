@@ -3,7 +3,7 @@
 # https://github.com/zenithzdev/kernyx
 set -euo pipefail
 
-REPO_URL="https://zenithzdev.github.io/kernyx-apt"
+REPO_URL="https://zenithzdev.github.io/kernyx"
 KEY_URL="$REPO_URL/kernyx.asc"
 EXPECTED_FINGERPRINT="864FE821DCAF96A4B8F9F71EFB1D9A2606C3F536"
 KEYRING="/etc/apt/keyrings/kernyx.gpg"

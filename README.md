@@ -38,7 +38,7 @@ cloud environment.
 ### First time — one command
 
 ```bash
-curl -fsSL https://zenithzdev.github.io/kernyx-apt/install.sh | sudo bash
+curl -fsSL https://zenithzdev.github.io/kernyx/install.sh | sudo bash
 ```
 
 The installer:
@@ -68,8 +68,8 @@ sudo rm /etc/apt/keyrings/kernyx.gpg
 
 ## APT Repository
 
-- Source repo: `https://github.com/zenithzdev/kernyx-apt`
-- Public URL: `https://zenithzdev.github.io/kernyx-apt/`
+- Source repo: `https://github.com/zenithzdev/kernyx`
+- Public URL: `https://zenithzdev.github.io/kernyx/`
 - Public key: `kernyx.asc`
 - Pinned fingerprint: `864FE821DCAF96A4B8F9F71EFB1D9A2606C3F536`
 - Metadata is GPG-signed (`InRelease`, `Release.gpg`)
@@ -319,12 +319,12 @@ Release workflow (on `v*` tags or manual dispatch):
 4. validates metadata and checksums
 5. publishes GitHub Release artifacts
 6. generates and signs APT metadata
-7. deploys to `kernyx-apt` Pages repo atomically
+7. deploys APT metadata to this repository's GitHub Pages
 8. verifies the published repository
 
 Required GitHub Actions Secrets:
 - `KERNYX_GPG_PRIVATE_KEY` — repository signing key
-- `KERNYX_APT_TOKEN` — PAT with write access to `kernyx-apt`
+- `GITHUB_TOKEN` (built-in) — used to publish GitHub Pages
 
 Never commit private keys.
 

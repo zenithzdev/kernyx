@@ -16,7 +16,6 @@ permissions:
 env:
   REPO_OWNER: zenithzdev
   SRC_REPO: kernyx
-  APT_REPO: kernyx-apt
   PKG_NAME: kernyx
   FINGERPRINT: 864FE821DCAF96A4B8F9F71EFB1D9A2606C3F536
 
@@ -175,17 +174,16 @@ jobs:
         run: |
           REPO=$(cat /tmp/repo_path)
           gpg --verify "$REPO/dists/stable/InRelease"
-      - name: Deploy to GitHub Pages repository
+      - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
-          personal_token: ${{ secrets.KERNYX_APT_TOKEN }}
-          external_repository: ${{ env.REPO_OWNER }}/${{ env.APT_REPO }}
-          publish_branch: main
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
           publish_dir: $(cat /tmp/repo_path)
           keep_files: true
           commit_message: "Release ${{ env.VERSION }}"
       - name: Verify published repository
         run: |
           sleep 30
-          curl -fsSL "https://${{ env.REPO_OWNER }}.github.io/${{ env.APT_REPO }}/dists/stable/InRelease" | grep -q 'Suite: stable'
-          curl -fsSL "https://${{ env.REPO_OWNER }}.github.io/${{ env.APT_REPO }}/install.sh" | grep -q 'KERNYX'
+          curl -fsSL "https://${{ env.REPO_OWNER }}.github.io/${{ env.SRC_REPO }}/dists/stable/InRelease" | grep -q 'Suite: stable'
+          curl -fsSL "https://${{ env.REPO_OWNER }}.github.io/${{ env.SRC_REPO }}/install.sh" | grep -q 'KERNYX'
