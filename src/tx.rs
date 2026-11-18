@@ -102,8 +102,9 @@ pub fn tx_begin(profile: &str, hw: &Hardware, plan: &[PlanItem]) -> Result<Strin
 }
 
 fn write_meta(dir: &Path, id: &str, profile: &str, hw: &Hardware) -> Result<()> {
+    let version = env!("CARGO_PKG_VERSION");
     let content = format!(
-        "txid={}\ncreated={}\nprofile={}\nprofile_name={}\nhostname={}\nkernel={}\ncpu={}\ncpu_effective={}\nram_mb={}\nvirtual={}\npve={}\ncloud={}\nversion=2.0.0\nstatus=open\n",
+        "txid={}\ncreated={}\nprofile={}\nprofile_name={}\nhostname={}\nkernel={}\ncpu={}\ncpu_effective={}\nram_mb={}\nvirtual={}\npve={}\ncloud={}\nversion={version}\nstatus=open\n",
         id, now_iso(), profile, profile, run_cmd_lossy("hostname", &[]), run_cmd_lossy("uname", &["-r"]),
         hw.cpu_model, hw.cpu_effective, hw.ram_mb, hw.is_virtual, hw.os_pve, hw.os_cloud
     );
@@ -227,6 +228,14 @@ pub fn tx_end_cleanup_dryrun() {
     }
     std::env::remove_var("KERNYX_TX_DIR");
     std::env::remove_var("KERNYX_TX_ID");
+}
+
+/// Most recent transaction that has not already been rolled back.
+pub fn latest_rollbackable() -> Option<(String, String, String, String)> {
+    tx_list()
+        .into_iter()
+        .rev()
+        .find(|transaction| transaction.3 != "rolled_back")
 }
 
 pub fn tx_list() -> Vec<(String, String, String, String)> {

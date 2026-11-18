@@ -2,8 +2,8 @@ use anyhow::Result;
 use clap::Parser;
 use kernyx::cli::{Cli, Commands, ConfigAction, OptimizeAction};
 use kernyx::{
-    apply, backup, benchmark, calc, config, detect, doctor, fetch, inspect, monitor, optimize,
-    persist, plan, report, tx, util,
+    backup, benchmark, calc, config, detect, doctor, fetch, inspect, monitor, optimize, persist,
+    plan, report, tx, util,
 };
 
 fn main() {
@@ -187,18 +187,7 @@ fn run(args: Cli) -> Result<()> {
             Ok(())
         }
         Some(Commands::Report) => report::show_report(),
-        Some(Commands::Rollback { tx }) => {
-            let id = tx.unwrap_or_else(|| {
-                tx::tx_list()
-                    .last()
-                    .map(|t| t.0.clone())
-                    .unwrap_or_default()
-            });
-            if id.is_empty() {
-                return Err(anyhow::anyhow!("No transaction available."));
-            }
-            apply::transaction_rollback(&id, "manual")
-        }
+        Some(Commands::Rollback { tx }) => optimize::rollback(tx),
         Some(Commands::History) => {
             for t in tx::tx_list() {
                 println!("{}\t{}\t{}\t{}", t.0, t.1, t.2, t.3);

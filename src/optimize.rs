@@ -910,7 +910,7 @@ pub fn rollback(tx_id: Option<String>) -> Result<()> {
             "Rolling back changes requires root. Re-run with sudo."
         ));
     }
-    let id = tx_id.or_else(|| tx::tx_list().last().map(|t| t.0.clone()));
+    let id = tx_id.or_else(|| tx::latest_rollbackable().map(|t| t.0));
     let Some(id) = id else {
         return Err(anyhow::anyhow!("No transaction available."));
     };
