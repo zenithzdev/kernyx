@@ -224,98 +224,11 @@ Upstream licenses are preserved in `third_party/` and `vendor/btop/`.
 
 ### `kernyx fetch`
 
-```text
-                             ....              root@ip-172-31-18-218
-              .',:clooo:  .:looooo:.           ---------------------
-           .;looooooooc  .oooooooooo'          OS: Ubuntu 24.04.5 LTS (Noble Numbat) x86_64
-        .;looooool:,''.  :ooooooooooc          Host: c6a.xlarge
-       ;looool;.         'oooooooooo,          Kernel: Linux 7.0.0-1014-aws
-      ;clool'             .cooooooc.  ,,       Uptime: 1 day, 2 hours, 59 mins
-         ...                ......  .:oo,      Packages: 925 (dpkg), 3 (snap)
-  .;clol:,.                        .loooo'     Shell: kernyx
- :ooooooooo,                        'ooool     Display (Unknown-1): 800x600 in 10", 60 Hz
-'ooooooooooo.                        loooo.    Terminal: opencode-pty
-'ooooooooool                         coooo.    CPU: AMD EPYC 7R13 (4) @ 3.60 GHz
- ,loooooooc.                        .loooo.    GPU: Amazon.com, Inc. Device 1111 (VGA compatible)
-   .,;;;'.                          ;ooooc     Memory: 1.32 GiB / 7.55 GiB (17%)
-       ...                         ,ooool.     Swap: Disabled
-    .cooooc.              ..',,'.  .cooo.      Disk (/): 9.77 GiB / 47.39 GiB (21%) - ext4
-      ;ooooo:.           ;oooooooc.  :l.       Local IP (ens5): 172.31.18.218/20
-       .coooooc,..      coooooooooo.           Locale: C.UTF-8
-         .:ooooooolc:. .ooooooooooo'           
-           .':loooooo;  ,oooooooooc            [40m   [41m   [42m   [43m   [44m   [45m   [46m   [47m   [m
-               ..';::c'  .;loooo:'             [100m   [101m   [102m   [103m   [104m   [105m   [106m   [107m   [m
-```
+![kernyx fetch](docs/screenshots/fetch.png)
 
 ### `kernyx optimize --dry-run`
 
-```text
-KERNYX OPTIMIZER 2.1.0
-System     Ubuntu 24.04.5 LTS
-Kernel     7.0.0-1014-aws
-CPU        AMD EPYC 7R13 Processor (4 logical / 2 cores / SMT)
-Memory     7.5 GiB
-Swap       none (recommended 4096 MiB)
-Storage    ebs (nvme0n1, ext4)
-Network    ens5 (ena, 1000 Mb/s, 4 rx queues)
-Workload   database
-Profile    Server - Balanced VPS/server performance and stability
-
-Dry run - complete optimization plan
-
-Already optimal
-  OK sysctl.vm.swappiness current: 10
-  OK sysctl.vm.vfs_cache_pressure current: 75
-  OK sysctl.vm.dirty_background_ratio current: 5
-  OK sysctl.vm.dirty_ratio current: 10
-  OK sysctl.vm.dirty_expire_centisecs current: 2000
-  OK sysctl.vm.watermark_scale_factor current: 10
-  OK sysctl.vm.page-cluster current: 0
-  OK sysctl.vm.compaction_proactiveness current: 20
-  OK sysctl.fs.file-max current: 9223372036854775807
-  OK sysctl.fs.nr_open current: 1048576
-  OK sysctl.kernel.pid_max current: 4194304
-  OK sysctl.fs.inotify.max_user_watches current: 524288
-  OK sysctl.fs.inotify.max_user_instances current: 256
-  OK sysctl.fs.aio-max-nr current: 1048576
-  OK sysctl.net.ipv4.tcp_congestion_control current: bbr
-  OK sysctl.net.core.default_qdisc current: fq
-  OK sysctl.net.core.rmem_max current: 12582912
-  OK sysctl.net.core.wmem_max current: 12582912
-  OK sysctl.net.ipv4.tcp_rmem current: 4096 131072 33554432
-  OK sysctl.net.ipv4.tcp_wmem current: 4096 65536 12582912
-  OK sysctl.net.core.optmem_max current: 131072
-  OK sysctl.net.core.somaxconn current: 8192
-  OK sysctl.net.ipv4.tcp_max_syn_backlog current: 8192
-  OK sysctl.net.core.netdev_max_backlog current: 16384
-  OK sysctl.net.ipv4.tcp_mtu_probing current: 1
-  OK sysctl.net.ipv4.ip_local_port_range current: 10240 65535
-  OK sysctl.net.ipv4.tcp_fastopen current: 3
-  OK sysctl.kernel.sched_autogroup_enabled current: 0
-  OK io.read_ahead current: 256
-
-Skipped or unsupported
-  - vm.overcommit_policy Changing vm.overcommit_memory can turn memory pressure into allocation failures; KERNYX reports it but does not change it.
-  - vm.min_free_kbytes Kernel-managed reserve; not changed automatically because the safe value is workload- and NUMA-specific.
-  - sysctl.vm.max_map_count administrator override in /etc/sysctl.d/10-map-count.conf (value: 1048576)
-  - sysctl.net.netfilter.nf_conntrack_max administrator override in /etc/sysctl.d/50-cloudimg-settings.conf (value: 1048576)
-  - cpu.governor CPU frequency is host-managed on this virtual machine; KERNYX does not force a governor.
-  - io.scheduler Virtual block device detected; the I/O scheduler is managed by the host.
-  - io.mount_options Filesystem and fstab changes are reported only; KERNYX never rewrites mount options automatically.
-  - thp.mode THP is already in a server-appropriate mode.
-  - numa.topology No NUMA affinity changes are needed.
-  - irq.rps Virtual NIC detected; packet steering is host-managed. Use --enable-rps only on bare metal.
-  - irq.affinity KERNYX never rewrites IRQ affinity automatically on cloud or unknown platforms.
-  - swap.recommend No swap is configured. Run `kernyx optimize` interactively or use `--swap 4G` to create one safely.
-  - kernel.cmdline KERNYX never modifies bootloader or kernel command-line configuration.
-  - kernel.virtualization Guest-specific tuning is limited to settings that are meaningful inside the VM.
-
-Dry run summary
-  > planned 0 change(s)
-  - skipped 43 item(s)
-  ! unsupported 0 item(s)
-    No runtime, file or persistent state was changed.
-```
+![kernyx optimize --dry-run](docs/screenshots/optimize.png)
 
 ### `kernyx monitor`
 
