@@ -220,21 +220,9 @@ Upstream licenses are preserved in `third_party/` and `vendor/btop/`.
 
 ---
 
-## Example output
+## Command screenshots
 
-### `kernyx fetch`
-
-![kernyx fetch](docs/screenshots/fetch.png)
-
-### `kernyx optimize --dry-run`
-
-![kernyx optimize --dry-run](docs/screenshots/optimize.png)
-
-### `kernyx monitor`
-
-`kernyx monitor` launches the bundled `btop` interface and requires a real TTY.
-It is not captured here because it is an interactive full-screen UI.
-
+See [`docs/COMMANDS.md`](docs/COMMANDS.md) for screenshots and short descriptions of every command.
 
 ---
 
