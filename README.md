@@ -1,3 +1,5 @@
+# ![KERNYX](assets/logo.png)
+
 # KERNYX
 
 [![CI](https://github.com/zenithzcloud/kernyx/actions/workflows/ci.yml/badge.svg)](https://github.com/zenithzcloud/kernyx/actions/workflows/ci.yml)
