@@ -48,6 +48,12 @@ esac
 
 log "Detected: $OS_ID $OS_VER ($ARCH)"
 
+# Remove stale KERNYX source entries from previous installations/repositories
+rm -f /etc/apt/sources.list.d/*kernyx*.list
+if [[ -f /etc/apt/sources.list ]]; then
+    sed -i '/kernyx/d' /etc/apt/sources.list
+fi
+
 # Install prerequisites (Debian minimal images often lack gpg/ca-certificates)
 log "Installing prerequisites"
 apt-get update -qq
@@ -57,12 +63,6 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
 for tool in curl gpg apt-get; do
     command -v "$tool" >/dev/null 2>&1 || die "Required tool missing: $tool"
 done
-
-# Remove stale KERNYX source entries from previous installations/repositories
-rm -f /etc/apt/sources.list.d/*kernyx*.list
-if [[ -f /etc/apt/sources.list ]]; then
-    sed -i '/kernyx/d' /etc/apt/sources.list
-fi
 
 install -d -m 0755 /etc/apt/keyrings
 
