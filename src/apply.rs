@@ -3,247 +3,586 @@ use crate::plan::PlanItem;
 use crate::tx::*;
 use crate::util::*;
 use anyhow::{Context, Result};
+use std::collections::BTreeMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 
-pub fn apply_preflight(hw: &Hardware) -> Result<()> {
-    // root check
+pub fn preflight(hw: &Hardware) -> Result<()> {
     if !is_dry_run() && !is_root() {
         return Err(anyhow::anyhow!(
             "Applying changes requires root. Re-run with sudo, or use --dry-run."
         ));
     }
-    if !hw.get("os.supported").map(|s| s == "1").unwrap_or(false) {
-        // allow
-    }
-    if hw.os_is_container && !is_dry_run() {
+    if hw.read_only_root {
         return Err(anyhow::anyhow!(
-            "Containerized environment detected. Use --dry-run or --force."
+            "The root filesystem is read-only; KERNYX cannot persist changes."
+        ));
+    }
+    if !is_dry_run() && !hw.proc_sys_writable && !hw.sysfs_writable {
+        return Err(anyhow::anyhow!(
+            "Neither /proc/sys nor /sys is writable in this environment."
         ));
     }
     Ok(())
 }
 
 fn is_root() -> bool {
-    crate::util::run_cmd_lossy("id", &["-u"]) == "0"
+    run_cmd_lossy("id", &["-u"]) == "0"
 }
 
-pub fn apply_sysctl_item(id: &str, key: &str, value: &str) -> Result<()> {
-    let current = sysctl_read(key);
-    // backup not file; record old in manifest
-    let item = TxItem {
+fn choice(raw: &str) -> String {
+    if let Some(start) = raw.find('[') {
+        if let Some(end) = raw[start + 1..].find(']') {
+            return raw[start + 1..start + 1 + end].to_string();
+        }
+    }
+    raw.split_whitespace().next().unwrap_or("").to_string()
+}
+
+fn record(id: &str, kind: &str, target: &str, old: &str, new: &str, extra: &str) {
+    tx_record(TxItem {
         id: id.to_string(),
-        kind: "sysctl".to_string(),
-        target: key.to_string(),
-        old: current.clone(),
-        new: value.to_string(),
+        kind: kind.to_string(),
+        target: target.to_string(),
+        old: old.to_string(),
+        new: new.to_string(),
         backup: None,
-        extra: "pre=0".to_string(),
+        extra: extra.to_string(),
         state: "recorded".to_string(),
-    };
-    tx_record(item);
+    });
+}
+
+fn fail(id: &str) {
+    tx_update_state(id, "failed");
+}
+
+fn apply_sysctl(item: &PlanItem) -> Result<()> {
+    let old = sysctl_read(&item.target);
+    record(&item.id, "sysctl", &item.target, &old, &item.value, "");
     if is_dry_run() {
         return Ok(());
     }
-    sysctl_write(key, value).with_context(|| format!("apply {}", key))?;
-    tx_update_state(id, "applied");
+    if let Err(e) = sysctl_write(&item.target, &item.value) {
+        fail(&item.id);
+        return Err(e);
+    }
+    let actual = sysctl_read(&item.target);
+    if !writable_value_matches(&actual, &item.value) {
+        if !old.is_empty() {
+            let _ = sysctl_write(&item.target, &old);
+        }
+        fail(&item.id);
+        return Err(anyhow::anyhow!(
+            "{} did not accept {} (current: {})",
+            item.target,
+            item.value,
+            actual
+        ));
+    }
+    tx_update_state(&item.id, "applied");
     Ok(())
 }
 
-pub fn apply_persistence() -> Result<()> {
-    if std::env::var("KERNYX_NO_PERSIST")
-        .map(|v| v == "1")
-        .unwrap_or(false)
-    {
+fn writable_value_matches(actual: &str, expected: &str) -> bool {
+    if equivalent(actual, expected) {
+        return true;
+    }
+    match (
+        actual
+            .split_whitespace()
+            .last()
+            .and_then(|v| v.parse::<i64>().ok()),
+        expected
+            .split_whitespace()
+            .last()
+            .and_then(|v| v.parse::<i64>().ok()),
+    ) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn apply_sysfs(item: &PlanItem) -> Result<()> {
+    let path = PathBuf::from(&item.target);
+    if !path.exists() {
+        fail(&item.id);
+        return Err(anyhow::anyhow!("{} does not exist", item.target));
+    }
+    let old = read_file(&path);
+    record(&item.id, "sysfs", &item.target, &old, &item.value, "");
+    if is_dry_run() {
         return Ok(());
     }
-    // sysctl drop-in
-    let items = load_manifest();
-    let mut map: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
-    let mut any = false;
-    for it in &items {
-        if it.kind == "sysctl" && it.state == "applied" {
-            map.insert(it.target.clone(), it.new.clone());
-            any = true;
+    if let Err(e) = write_sysfs(&path, &item.value) {
+        fail(&item.id);
+        return Err(e);
+    }
+    let actual = read_file(&path);
+    if !equivalent(&actual, &item.value) {
+        let _ = write_sysfs(&path, &old);
+        fail(&item.id);
+        return Err(anyhow::anyhow!(
+            "{} did not accept {} (current: {})",
+            item.target,
+            item.value,
+            actual
+        ));
+    }
+    tx_update_state(&item.id, "applied");
+    Ok(())
+}
+
+fn apply_sysfs_choice(item: &PlanItem) -> Result<()> {
+    let path = PathBuf::from(&item.target);
+    if !path.exists() {
+        fail(&item.id);
+        return Err(anyhow::anyhow!("{} does not exist", item.target));
+    }
+    let old = choice(&read_file(&path));
+    record(&item.id, "sysfs", &item.target, &old, &item.value, "");
+    if is_dry_run() {
+        return Ok(());
+    }
+    if let Err(e) = write_sysfs(&path, &item.value) {
+        fail(&item.id);
+        return Err(e);
+    }
+    if choice(&read_file(&path)) != item.value {
+        let _ = write_sysfs(&path, &old);
+        fail(&item.id);
+        return Err(anyhow::anyhow!(
+            "{} did not select {}",
+            item.target,
+            item.value
+        ));
+    }
+    tx_update_state(&item.id, "applied");
+    Ok(())
+}
+
+fn cpu_attr_paths(attr: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for i in 0..=255 {
+        let raw = format!("/sys/devices/system/cpu/cpu{i}/cpufreq/{attr}");
+        let path = rooted(&raw);
+        if path.exists() {
+            out.push(path);
         }
     }
-    if !any {
+    out
+}
+
+fn apply_cpu_attr(item: &PlanItem, attr: &str, kind: &str) -> Result<()> {
+    let paths = cpu_attr_paths(attr);
+    if paths.is_empty() {
+        fail(&item.id);
+        return Err(anyhow::anyhow!("no cpufreq policies found"));
+    }
+    let old: BTreeMap<String, String> = paths
+        .iter()
+        .map(|p| (p.to_string_lossy().to_string(), read_file(p)))
+        .collect();
+    let old_json = serde_json::to_string(&old).unwrap_or_default();
+    record(&item.id, kind, "cpufreq", &old_json, &item.value, "");
+    if is_dry_run() {
         return Ok(());
     }
-    let path = rooted("/etc/sysctl.d/99-kernyx.conf");
-    if path.exists() {
-        let content = std::fs::read_to_string(&path).unwrap_or_default();
-        if !content.contains("Managed by kernyx") && !content.contains("Managed by ahopt") {
+    let mut written: Vec<PathBuf> = Vec::new();
+    for path in &paths {
+        if let Err(e) = write_sysfs(path, &item.value) {
+            for done in &written {
+                if let Some(previous) = old.get(&done.to_string_lossy().to_string()) {
+                    let _ = write_sysfs(done, previous);
+                }
+            }
+            fail(&item.id);
+            return Err(e);
+        }
+        written.push(path.clone());
+    }
+    for path in &paths {
+        if read_file(path) != item.value {
+            for done in &written {
+                if let Some(previous) = old.get(&done.to_string_lossy().to_string()) {
+                    let _ = write_sysfs(done, previous);
+                }
+            }
+            fail(&item.id);
             return Err(anyhow::anyhow!(
-                "Refusing to overwrite unmanaged sysctl file"
+                "{} did not accept {} on {}",
+                attr,
+                item.value,
+                path.display()
             ));
         }
     }
-    let mut content = String::from("Managed by kernyx (KERNYX)\n# Generated by KERNYX\n");
-    for (k, v) in &map {
-        content.push_str(&format!("{} = {}\n", k, v));
-    }
-    if is_dry_run() {
-        println!("[dry-run] would write {}", path.display());
-        return Ok(());
-    }
-    atomic_write(&path, &content, 0o644)?;
-    // record as file item
-    let hash = sha256_file(&path);
-    let old_hash = "missing".to_string();
-    let txitem = TxItem {
-        id: "persistence.sysctl".to_string(),
-        kind: "file".to_string(),
-        target: "/etc/sysctl.d/99-kernyx.conf".to_string(),
-        old: old_hash,
-        new: hash,
-        backup: None,
-        extra: "mode=644".to_string(),
-        state: "recorded".to_string(),
-    };
-    tx_record(txitem);
-    tx_update_state("persistence.sysctl", "applied");
+    tx_update_state(&item.id, "applied");
     Ok(())
 }
 
-pub fn apply_execute_plan(hw: &Hardware, profile: &str, plan: &[PlanItem]) -> Result<()> {
-    use crate::calc::calculate;
-    let _ = calculate(hw, profile);
-    let selected: Vec<&PlanItem> = plan.iter().filter(|p| !p.skip).collect();
-    if selected.is_empty() {
-        println!("No applicable changes.");
-        return Ok(());
-    }
-    let id = tx_begin(profile, hw, plan)?;
-    let mut failures = 0;
-    for p in &selected {
-        if p.kind == "sysctl" {
-            if let Err(e) = apply_sysctl_item(&p.id, &p.target, &p.value) {
-                eprintln!("{}", e);
-                failures += 1;
-                break;
-            }
-        } else {
-            // skip non-sysctl
-        }
-    }
-    if failures > 0 {
-        // rollback
-        let _ = transaction_rollback(&id, "apply failed");
-        tx_end_cleanup_dryrun();
-        return Err(anyhow::anyhow!("apply failed"));
-    }
-    if let Err(e) = apply_persistence() {
-        eprintln!("{}", e);
-        let _ = transaction_rollback(&id, "persistence failed");
-        tx_end_cleanup_dryrun();
-        return Err(e);
-    }
-    if is_dry_run() {
-        let applied = selected.len();
-        println!("\n[dry-run] {} item(s) simulated, 0 skipped. No runtime, file or persistent state was changed.", applied);
-        tx_end_cleanup_dryrun();
-        return Ok(());
-    }
-    tx_set_status(
-        "committed",
-        Some(&format!(
-            "applied={} skipped=0 verify=passed",
-            selected.len()
-        )),
-    );
-    // report
-    let report_path = tx_dir(&id).join("report.md");
-    let mut report = String::new();
-    report.push_str("# KERNYX Transaction Report\n\n");
-    report.push_str(&format!("- Transaction: `{}`\n", id));
-    report.push_str(&format!("- Profile: {}\n", profile));
-    report.push_str(&format!("- Applied: {}\n", selected.len()));
-    report.push_str("\n## Changes\n\n| ID | Target | Before | After |\n|---|---|---|---|\n");
-    for p in &selected {
-        report.push_str(&format!(
-            "| {} | {} | {} | {} |\n",
-            p.id, p.target, p.current, p.value
+fn scheduler_path(device: &str) -> PathBuf {
+    rooted(&format!("/sys/block/{device}/queue/scheduler"))
+}
+
+fn apply_io_scheduler(item: &PlanItem) -> Result<()> {
+    let path = scheduler_path(&item.target);
+    if !path.exists() {
+        fail(&item.id);
+        return Err(anyhow::anyhow!(
+            "scheduler path missing for {}",
+            item.target
         ));
     }
-    let _ = fs::write(&report_path, report);
-    println!("\nApply complete");
-    println!("Transaction: {}", id);
-    println!("Applied: {}", selected.len());
-    println!("Rollback: kernyx rollback --tx {}", id);
+    let old = choice(&read_file(&path));
+    record(
+        &item.id,
+        "io_scheduler",
+        &item.target,
+        &old,
+        &item.value,
+        "",
+    );
+    if is_dry_run() {
+        return Ok(());
+    }
+    if let Err(e) = write_sysfs(&path, &item.value) {
+        fail(&item.id);
+        return Err(e);
+    }
+    let actual = choice(&read_file(&path));
+    if actual != item.value {
+        let _ = write_sysfs(&path, &old);
+        fail(&item.id);
+        return Err(anyhow::anyhow!(
+            "scheduler {} not accepted on {} (current: {})",
+            item.value,
+            item.target,
+            actual
+        ));
+    }
+    tx_update_state(&item.id, "applied");
     Ok(())
+}
+
+fn rps_paths(iface: &str, prefix: &str, attr: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let base = rooted(&format!("/sys/class/net/{iface}/queues"));
+    if let Ok(rd) = fs::read_dir(&base) {
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(prefix) {
+                let path = entry.path().join(attr);
+                if path.exists() {
+                    out.push(path);
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn apply_rps(item: &PlanItem) -> Result<()> {
+    let mut paths = rps_paths(&item.target, "rx-", "rps_cpus");
+    paths.extend(rps_paths(&item.target, "tx-", "xps_cpus"));
+    if paths.is_empty() {
+        fail(&item.id);
+        return Err(anyhow::anyhow!(
+            "no RPS/XPS queues found for {}",
+            item.target
+        ));
+    }
+    let old: BTreeMap<String, String> = paths
+        .iter()
+        .map(|p| (p.to_string_lossy().to_string(), read_file(p)))
+        .collect();
+    let old_json = serde_json::to_string(&old).unwrap_or_default();
+    record(&item.id, "rps", &item.target, &old_json, &item.value, "");
+    if is_dry_run() {
+        return Ok(());
+    }
+    for path in &paths {
+        if let Err(e) = write_sysfs(path, &item.value) {
+            for done in &paths {
+                if let Some(previous) = old.get(&done.to_string_lossy().to_string()) {
+                    let _ = write_sysfs(done, previous);
+                }
+            }
+            fail(&item.id);
+            return Err(e).with_context(|| format!("write RPS {}", path.display()));
+        }
+    }
+    for path in &paths {
+        if read_file(path).trim_start_matches('0') != item.value.trim_start_matches('0') {
+            for done in &paths {
+                if let Some(previous) = old.get(&done.to_string_lossy().to_string()) {
+                    let _ = write_sysfs(done, previous);
+                }
+            }
+            fail(&item.id);
+            return Err(anyhow::anyhow!(
+                "RPS/XPS did not accept {} on {}",
+                item.value,
+                path.display()
+            ));
+        }
+    }
+    tx_update_state(&item.id, "applied");
+    Ok(())
+}
+
+fn apply_swap(item: &PlanItem) -> Result<()> {
+    let size = item
+        .value
+        .trim_end_matches("MiB")
+        .trim()
+        .parse::<u64>()
+        .with_context(|| format!("invalid swap size: {}", item.value))?;
+    crate::swap::create(size)?;
+    tx_update_state(&item.id, "applied");
+    Ok(())
+}
+
+pub fn apply_item(item: &PlanItem) -> Result<()> {
+    match item.kind.as_str() {
+        "sysctl" => apply_sysctl(item),
+        "sysfs" => apply_sysfs(item),
+        "sysfs_choice" => apply_sysfs_choice(item),
+        "cpu_governor" => apply_cpu_attr(item, "scaling_governor", "cpu_governor"),
+        "cpu_epp" => apply_cpu_attr(item, "energy_performance_preference", "cpu_epp"),
+        "io_scheduler" => apply_io_scheduler(item),
+        "rps" => apply_rps(item),
+        "swap" => apply_swap(item),
+        "advice" => Ok(()),
+        other => Err(anyhow::anyhow!("unknown optimization kind: {other}")),
+    }
+}
+
+fn verify_item(item: &PlanItem) -> Result<()> {
+    match item.kind.as_str() {
+        "sysctl" => {
+            let actual = sysctl_read(&item.target);
+            if writable_value_matches(&actual, &item.value) {
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!(
+                    "{} is {} (expected {})",
+                    item.target,
+                    actual,
+                    item.value
+                ))
+            }
+        }
+        "sysfs" => {
+            let actual = read_file(Path::new(&item.target));
+            if equivalent(&actual, &item.value) {
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!(
+                    "{} is {} (expected {})",
+                    item.target,
+                    actual,
+                    item.value
+                ))
+            }
+        }
+        "sysfs_choice" => {
+            let actual = choice(&read_file(Path::new(&item.target)));
+            if actual == item.value {
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!(
+                    "{} selected {} (expected {})",
+                    item.target,
+                    actual,
+                    item.value
+                ))
+            }
+        }
+        "cpu_governor" => verify_cpu_attr("scaling_governor", &item.value),
+        "cpu_epp" => verify_cpu_attr("energy_performance_preference", &item.value),
+        "io_scheduler" => {
+            let actual = choice(&read_file(&scheduler_path(&item.target)));
+            if actual == item.value {
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!(
+                    "scheduler is {} (expected {})",
+                    actual,
+                    item.value
+                ))
+            }
+        }
+        "rps" => {
+            let mut paths = rps_paths(&item.target, "rx-", "rps_cpus");
+            paths.extend(rps_paths(&item.target, "tx-", "xps_cpus"));
+            for path in paths {
+                let actual = read_file(&path);
+                if actual.trim_start_matches('0') != item.value.trim_start_matches('0') {
+                    return Err(anyhow::anyhow!(
+                        "RPS/XPS on {} is {} (expected {})",
+                        path.display(),
+                        actual,
+                        item.value
+                    ));
+                }
+            }
+            Ok(())
+        }
+        "swap" => {
+            if crate::swap::verify_active(Path::new(&item.target)) {
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!("swap {} is not active", item.target))
+            }
+        }
+        "advice" => Ok(()),
+        _ => Ok(()),
+    }
+}
+
+fn verify_cpu_attr(attr: &str, expected: &str) -> Result<()> {
+    for path in cpu_attr_paths(attr) {
+        let actual = read_file(&path);
+        if actual != expected {
+            return Err(anyhow::anyhow!(
+                "{} is {} (expected {})",
+                path.display(),
+                actual,
+                expected
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn verify_plan(plan: &mut [PlanItem]) -> (usize, usize) {
+    let mut verified = 0;
+    let mut failed = 0;
+    for item in plan.iter_mut() {
+        if item.status != "applied" {
+            continue;
+        }
+        match verify_item(item) {
+            Ok(()) => {
+                item.status = "verified".to_string();
+                verified += 1;
+            }
+            Err(e) => {
+                item.status = "failed".to_string();
+                item.detail = e.to_string();
+                failed += 1;
+            }
+        }
+    }
+    (verified, failed)
+}
+
+fn restore_file(item: &TxItem) -> Result<()> {
+    let target = rooted(&item.target);
+    if item.old == "missing" {
+        if target.exists() {
+            fs::remove_file(&target)?;
+        }
+        return Ok(());
+    }
+    if let Some(backup) = &item.backup {
+        if !backup.is_empty() {
+            rooted_backup_restore(backup, &target)?;
+            return Ok(());
+        }
+    }
+    Err(anyhow::anyhow!("no backup available for {}", item.target))
+}
+
+fn restore_map(value: &str, kind: &str) -> Result<()> {
+    let map: BTreeMap<String, String> = serde_json::from_str(value).unwrap_or_default();
+    let mut errors = Vec::new();
+    for (path, old) in map {
+        if let Err(e) = write_sysfs(Path::new(&path), &old) {
+            errors.push(format!("{kind} {path}: {e}"));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(errors.join("; ")))
+    }
 }
 
 pub fn transaction_rollback(tx_id: &str, reason: &str) -> Result<()> {
-    // set env to tx dir
     let dir = tx_root().join(tx_id);
+    if !dir.exists() {
+        return Err(anyhow::anyhow!("transaction {} does not exist", tx_id));
+    }
     std::env::set_var("KERNYX_TX_DIR", dir.to_string_lossy().to_string());
     std::env::set_var("KERNYX_TX_ID", tx_id);
     let items = load_manifest();
-    // reverse
-    let mut items_rev: Vec<TxItem> = items.clone();
-    items_rev.reverse();
-    for it in &items_rev {
-        if it.state != "applied" && it.state != "recorded" && it.state != "failed" {
+    let mut failures = Vec::new();
+    let mut restored = 0;
+
+    for item in items.iter().rev() {
+        if !matches!(item.state.as_str(), "applied" | "recorded" | "failed") {
             continue;
         }
-        match it.kind.as_str() {
+        let result = match item.kind.as_str() {
             "sysctl" => {
-                if !it.old.is_empty() {
-                    let _ = sysctl_write(&it.target, &it.old);
-                }
-                // remove from drop-in
-                remove_sysctl_from_dropin(&it.target);
-            }
-            "file" => {
-                if it.old == "missing" {
-                    let p = rooted(&it.target);
-                    let _ = std::fs::remove_file(&p);
-                } else if let Some(b) = &it.backup {
-                    if !b.is_empty() {
-                        let _ = rooted_backup_restore(b, &rooted(&it.target));
-                    }
+                if item.old.is_empty() {
+                    Ok(())
+                } else {
+                    sysctl_write(&item.target, &item.old)
                 }
             }
-            _ => {}
+            "sysfs" => {
+                if item.old.is_empty() {
+                    Ok(())
+                } else {
+                    write_sysfs(Path::new(&item.target), &item.old)
+                }
+            }
+            "cpu_governor" => restore_map(&item.old, "governor"),
+            "cpu_epp" => restore_map(&item.old, "EPP"),
+            "rps" => restore_map(&item.old, "RPS/XPS"),
+            "io_scheduler" => {
+                if item.old.is_empty() {
+                    Ok(())
+                } else {
+                    write_sysfs(&scheduler_path(&item.target), &item.old)
+                }
+            }
+            "swap" => crate::swap::remove(Path::new(&item.target)),
+            "file" => restore_file(item),
+            _ => Ok(()),
+        };
+        match result {
+            Ok(()) => {
+                restored += 1;
+                tx_update_state(&item.id, "rolled_back");
+            }
+            Err(e) => failures.push(format!("{}: {e}", item.id)),
         }
-        tx_update_state(&it.id, "rolled_back");
     }
-    tx_set_status("rolled_back", Some(reason));
-    tx_end_cleanup_dryrun();
-    Ok(())
-}
 
-fn remove_sysctl_from_dropin(key: &str) {
-    let path = rooted("/etc/sysctl.d/99-kernyx.conf");
-    if !path.exists() {
-        return;
-    }
-    let content = std::fs::read_to_string(&path).unwrap_or_default();
-    if !content.contains("Managed by kernyx") {
-        return;
-    } // don't touch unmanaged
-    let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-    lines.retain(|l| {
-        let t = l.trim();
-        if t.is_empty() || t.starts_with('#') || t.starts_with("Managed") {
-            return true;
-        }
-        // key = value
-        if let Some(k) = t.split('=').next() {
-            if k.trim() == key {
-                return false;
-            }
-        }
-        true
-    });
-    // remove file if no keys
-    let has_key = lines.iter().any(|l| {
-        let t = l.trim();
-        !t.is_empty() && !t.starts_with('#') && !t.starts_with("Managed") && t.contains('=')
-    });
-    if has_key {
-        let _ = atomic_write(&path, &lines.join("\n"), 0o644);
+    tx_set_status(
+        "rolled_back",
+        Some(if failures.is_empty() {
+            reason
+        } else {
+            "rollback completed with errors"
+        }),
+    );
+    tx_end_cleanup_dryrun();
+
+    if failures.is_empty() {
+        println!("Rolled back transaction {} ({} items).", tx_id, restored);
+        Ok(())
     } else {
-        let _ = std::fs::remove_file(&path);
+        for failure in &failures {
+            eprintln!("rollback warning: {failure}");
+        }
+        Err(anyhow::anyhow!(
+            "rollback completed with {} error(s)",
+            failures.len()
+        ))
     }
 }

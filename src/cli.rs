@@ -3,22 +3,32 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(
     name = "kernyx",
-    version = "2.0.0",
+    version = env!("CARGO_PKG_VERSION"),
     about = "KERNYX - Adaptive Linux Performance Optimization Engine"
 )]
 pub struct Cli {
+    /// Emit machine-readable JSON (disables animation)
     #[arg(long, global = true)]
     pub json: bool,
+    /// Only print final status lines
     #[arg(long, global = true)]
     pub quiet: bool,
+    /// Show additional detection detail
     #[arg(long, global = true)]
     pub verbose: bool,
+    /// Show what would change without modifying the system
     #[arg(long, global = true)]
     pub dry_run: bool,
+    /// Assume yes for confirmations
     #[arg(long, global = true)]
     pub yes: bool,
+    /// Never prompt; use defaults and plain output
     #[arg(long, global = true)]
+    pub non_interactive: bool,
+    /// Tuning profile: safe, server, performance or custom
+    #[arg(long, global = true, value_name = "PROFILE")]
     pub profile: Option<String>,
+    /// Skip cloud metadata lookups
     #[arg(long, global = true)]
     pub no_imds: bool,
     #[command(subcommand)]
@@ -27,70 +37,101 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    #[command(aliases = ["f"], visible_aliases = ["f"])]
+    #[command(visible_aliases = ["f"])]
     Fetch,
-    #[command(aliases = ["m", "mon"], visible_aliases = ["m", "mon"])]
+    #[command(visible_aliases = ["m", "mon"])]
     Monitor,
-    #[command(aliases = ["d", "det"], visible_aliases = ["d", "det"])]
+    #[command(visible_aliases = ["d", "det"])]
     Detect,
-    #[command(aliases = ["a", "an"], visible_aliases = ["a", "an"])]
+    #[command(visible_aliases = ["a", "an"])]
     Analyze,
-    #[command(aliases = ["o", "opt"], visible_aliases = ["o", "opt"])]
+    /// Detect, plan, apply and persist adaptive kernel tuning
+    #[command(visible_aliases = ["o", "opt"])]
     Optimize {
+        #[command(subcommand)]
+        action: Option<OptimizeAction>,
+        /// Use the balanced Server profile (default)
+        #[arg(long, conflicts_with_all = ["safe", "performance"])]
+        server: bool,
+        /// Use the conservative Safe profile
+        #[arg(long, conflicts_with_all = ["server", "performance"])]
+        safe: bool,
+        /// Use the throughput-oriented Performance profile
+        #[arg(long, conflicts_with_all = ["safe", "server"])]
+        performance: bool,
+        /// Comma-separated categories (memory,limits,network,cpu,io,thp,numa,irq,swap,kernel)
+        #[arg(long, value_name = "LIST")]
+        categories: Option<String>,
+        /// Swap size to create when swap is missing (for example 2G, 4096M or none)
+        #[arg(long, value_name = "SIZE")]
+        swap: Option<String>,
+        /// Opt in to IRQ/RPS/XPS steering on supported bare-metal NICs
         #[arg(long)]
-        profile: Option<String>,
-        #[arg(long)]
-        dry_run: bool,
+        enable_rps: bool,
     },
-    #[command(aliases = ["s", "st"], visible_aliases = ["s", "st"])]
+    #[command(visible_aliases = ["s", "st"])]
     Status,
-    #[command(aliases = ["r", "rep"], visible_aliases = ["r", "rep"])]
+    #[command(visible_aliases = ["r", "rep"])]
     Report,
-    #[command(aliases = ["hl"], visible_aliases = ["hl"])]
+    #[command(visible_aliases = ["hl"])]
     Health,
-    #[command(aliases = ["p", "ps", "proc"], visible_aliases = ["p", "ps", "proc"])]
+    #[command(visible_aliases = ["p", "ps", "proc"])]
     Process,
-    #[command(aliases = ["n", "net"], visible_aliases = ["n", "net"])]
+    #[command(visible_aliases = ["n", "net"])]
     Network,
-    #[command(aliases = ["stg", "disk"], visible_aliases = ["stg", "disk"])]
+    #[command(visible_aliases = ["stg", "disk"])]
     Storage,
-    #[command(aliases = ["mem"], visible_aliases = ["mem"])]
+    #[command(visible_aliases = ["mem"])]
     Memory,
-    #[command(aliases = ["cpuinfo"], visible_aliases = ["cpuinfo"])]
+    #[command(visible_aliases = ["cpuinfo"])]
     Cpu,
-    #[command(aliases = ["svc"], visible_aliases = ["svc"])]
+    #[command(visible_aliases = ["svc"])]
     Services,
-    #[command(aliases = ["sec"], visible_aliases = ["sec"])]
+    #[command(visible_aliases = ["sec"])]
     Security,
-    #[command(aliases = ["bench", "bm"], visible_aliases = ["bench", "bm"])]
+    #[command(visible_aliases = ["bench", "bm"])]
     Benchmark {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
-    #[command(aliases = ["doc", "dr"], visible_aliases = ["doc", "dr"])]
+    #[command(visible_aliases = ["doc", "dr"])]
     Doctor,
-    #[command(aliases = ["backup"], visible_aliases = ["backup"])]
-    Backup { label: Option<String> },
-    #[command(aliases = ["backups"], visible_aliases = ["backups"])]
-    Backups { id: Option<String> },
-    #[command(aliases = ["rb", "roll"], visible_aliases = ["rb", "roll"])]
+    Backup {
+        label: Option<String>,
+    },
+    Backups {
+        id: Option<String>,
+    },
+    #[command(visible_aliases = ["rb", "roll"])]
     Rollback {
         #[arg(long)]
         tx: Option<String>,
     },
-    #[command(aliases = ["h", "hist"], visible_aliases = ["h", "hist"])]
+    #[command(visible_aliases = ["hist"])]
     History,
-    #[command(aliases = ["c", "cfg"], visible_aliases = ["c", "cfg"])]
+    #[command(visible_aliases = ["c", "cfg"])]
     Config {
         #[command(subcommand)]
         action: ConfigAction,
     },
-    #[command(aliases = ["v", "ver"], visible_aliases = ["v", "ver"])]
+    #[command(visible_aliases = ["v", "ver"])]
     Version,
-    #[command(aliases = ["un"], visible_aliases = ["un"])]
+    #[command(visible_aliases = ["un"])]
     Uninstall,
-    #[command(aliases = ["up"], visible_aliases = ["up"])]
+    #[command(visible_aliases = ["up"])]
     Update,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum OptimizeAction {
+    /// Show managed settings, runtime drift, swap and the last transaction
+    Status,
+    /// Revert a KERNYX transaction and its runtime changes
+    Rollback {
+        /// Transaction ID (defaults to the most recent one)
+        #[arg(long, value_name = "ID")]
+        tx: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

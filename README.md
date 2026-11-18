@@ -86,10 +86,12 @@ kernyx                          # concise system overview
 kernyx detect                   # hardware detection
 kernyx analyze                  # diagnostics + bottlenecks
 kernyx optimize --dry-run       # simulate every change safely
-kernyx optimize                 # apply (explicit authorization implied by user action)
-kernyx status                   # show current state
-kernyx report                   # show transaction report
-kernyx rollback                 # undo the last transaction
+kernyx optimize                 # interactive profile selection, then apply
+kernyx optimize --server        # balanced server profile (default)
+kernyx optimize status          # managed state, drift and swap
+kernyx optimize rollback --tx <ID>  # undo a specific transaction
+kernyx status                   # transaction and persistence summary
+kernyx report                   # show latest transaction report
 kernyx fetch                    # real fastfetch system info
 kernyx monitor                  # real btop monitoring UI
 kernyx benchmark -- 'sleep 0.1' # hyperfine statistical benchmark
@@ -106,7 +108,9 @@ kernyx benchmark -- 'sleep 0.1' # hyperfine statistical benchmark
 | `kernyx monitor` | `m`, `mon` | Real btop monitoring interface (TTY required) |
 | `kernyx detect` | `d`, `det` | Detect CPU, memory, storage, network, OS/cloud |
 | `kernyx analyze` | `a`, `an` | Diagnostics: bottlenecks, health issues, conflicts |
-| `kernyx optimize` | `o`, `opt` | Apply calculated optimizations transactionally |
+| `kernyx optimize` | `o`, `opt` | Plan/apply adaptive tuning transactionally |
+| `kernyx optimize status` | `o status` | Managed settings, runtime drift, swap, last transaction |
+| `kernyx optimize rollback` | `o rollback` | Roll back a transaction (latest by default) |
 | `kernyx status` | `s`, `st` | Transaction and persistence state |
 | `kernyx report` | `r`, `rep` | Latest transaction report |
 | `kernyx doctor` | `doc`, `dr` | Installation/compatibility diagnostics |
@@ -132,11 +136,12 @@ kernyx benchmark -- 'sleep 0.1' # hyperfine statistical benchmark
 Examples:
 ```bash
 kernyx o --dry-run
-kernyx o --profile vps
-kernyx o --profile dedicated
-kernyx o --profile proxmox
-kernyx o --profile game-server
-kernyx rb --tx <ID>
+kernyx o --safe
+kernyx o --performance --categories network,limits
+kernyx o --swap 2G
+kernyx o --non-interactive
+kernyx o status --json
+kernyx o rollback --tx <ID>
 kernyx bench -- 'grep -R TODO .'
 ```
 
@@ -146,15 +151,30 @@ kernyx bench -- 'grep -R TODO .'
 
 | Option | Meaning |
 |---|---|
-| `-n`, `--dry-run` | Simulate only; write nothing |
-| `-y`, `--yes` | Explicit non-interactive confirmation |
+| `--dry-run` | Simulate only; write nothing |
+| `--yes` | Explicit confirmation; skips prompts |
+| `--non-interactive` | Never prompt; plain output and defaults |
 | `--json` | Machine-readable JSON output |
 | `--quiet` | Suppress informational output |
 | `--verbose` | Extra detail |
-| `--profile NAME` | `automatic`, `vps`, `dedicated`, `proxmox`, `game-server` |
+| `--profile NAME` | `safe`, `server`, `performance`, `custom`; legacy names map to these |
 | `--no-imds` | Skip cloud metadata lookup |
 | `-h`, `--help` | Help |
 | `-V`, `--version` | Version |
+
+Optimizer-specific options:
+
+| Option | Meaning |
+|---|---|
+| `--safe` | Conservative profile: minimal, low-risk changes |
+| `--server` | Balanced VPS/server profile (default) |
+| `--performance` | Throughput-oriented profile; review trade-offs |
+| `--categories LIST` | Restrict to `memory,limits,network,cpu,io,thp,numa,irq,swap,kernel` |
+| `--swap SIZE` | Create a swap file when swap is missing (`2G`, `4096M`, `none`) |
+| `--enable-rps` | Opt in to RPS/XPS steering on supported bare-metal NICs |
+
+Profiles can also be selected interactively. Custom prompts for categories unless
+`--categories` is supplied.
 
 ---
 
@@ -166,20 +186,22 @@ DETECT -> ANALYZE -> CALCULATE -> VALIDATE -> SHOW CHANGES -> APPLY -> VERIFY ->
 
 1. `kernyx detect` — collect real hardware facts
 2. `kernyx analyze` — find actual bottlenecks and misconfigurations
-3. `kernyx optimize --dry-run` — see exactly what would change
-4. `kernyx backup before` — snapshot managed configuration
-5. `kernyx optimize` — apply under a transaction
-6. `kernyx status` / `kernyx report` — verify and review
-7. `kernyx rollback --tx <ID>` — undo if needed
+3. `kernyx optimize --dry-run` — see every proposed change, reason and risk
+4. `kernyx optimize` — choose a profile, review, confirm and apply
+5. `kernyx optimize status` / `kernyx report` — verify runtime values and persistence
+6. `kernyx optimize rollback --tx <ID>` — restore recorded previous values
 
 Optimizations are calculated from detected hardware:
-- CPU topology, SMT, cgroup limits, governor availability
-- RAM size, swap, zram, memory pressure
-- Storage class (NVMe/SSD/HDD/EBS/virtio)
-- NIC speed, queues, driver capabilities
-- Kernel feature availability (BBR/FQ, etc.)
+- CPU topology, SMT, cgroup limits, governor/EPP availability
+- RAM size, swap, zram/zswap, PSI memory pressure, overcommit
+- Storage class (NVMe/SSD/HDD/EBS/virtio), scheduler and read-ahead
+- NIC speed, queues, driver capabilities, conntrack state
+- Kernel feature availability (BBR/FQ, THP, PSI, NUMA)
+- Detected workload (database, web, container host, virtualization)
 
-No blind maximums. No hardcoded host-specific values.
+No blind maximums. Values are clamped and raise-only where lowering could hurt.
+Unchanged values are still persisted so a reboot never lowers an existing ceiling.
+Administrator-owned sysctl configuration is detected and never overridden.
 
 ---
 
@@ -202,22 +224,32 @@ Upstream licenses are preserved in `third_party/` and `vendor/btop/`.
 KERNYX never automatically modifies:
 - CPU mitigations, C-states, firmware/BIOS settings
 - Guest VM/LXC definitions, storage pools, cluster config
-- `/etc/fstab`, mount options, partitions, RAID, filesystems
+- Existing `/etc/fstab` entries, mount options, partitions, RAID, filesystems
 - Bridges, bonds, VLANs, XDP/eBPF programs
-- SSH access, firewall rules, boot configuration
+- SSH access, firewall rules, bootloader, kernel command line
 
-Unsupported settings are skipped. ZFS/RPS/security tuning is opt-in.
-Every change is checked against the live system before application.
+After explicit confirmation, KERNYX may create a new swap file and append one
+KERNYX-managed swap entry to `/etc/fstab`. Existing swap is never removed
+automatically. RPS/XPS and IRQ steering are opt-in with `--enable-rps` and are
+skipped on unknown cloud platforms.
+
+Unsupported parameters are reported as skipped or unsupported instead of being
+forced. Every applied item is verified against the live kernel, and failures are
+isolated so other changes still complete.
 
 ---
 
 ## Persistence and rollback
 
-- Runtime sysctls are persisted in `/etc/sysctl.d/99-kernyx.conf`
+- New sysctls are persisted in `/etc/sysctl.d/99-kernyx-optimization.conf`
+- Legacy managed drop-ins such as `/etc/sysctl.d/99-kernyx.conf` and
+  `/etc/sysctl.d/99-ahopt.conf` are migrated into the new file
 - Each apply creates a transaction under `/var/lib/kernyx/transactions/`
-- Original values and file backups are recorded
-- Rollback restores actual previous values, never generic defaults
-- Idempotent: re-running the same policy reports no changes
+- Original runtime values and backups of every modified file are recorded
+- Rollback restores actual previous values, never generic defaults, and removes
+  only swap files created by that transaction
+- Re-running the same profile reports unchanged items; planned changes remain
+  idempotent
 
 ---
 
@@ -244,7 +276,10 @@ src/
   plan.rs       - plan items, reasons, risks
   apply.rs      - apply orchestration, verification
   tx.rs         - transactions, manifest, backup/rollback
-  persist.rs    - persistence helpers (via apply.rs)
+  persist.rs    - managed sysctl drop-in, tmpfiles and udev persistence
+  optimize.rs   - profile selection, dry-run, apply, status and rollback
+  swap.rs       - swap recommendation, creation, fstab and verification
+  ui.rs         - animated TTY output with plain/JSON fallbacks
   report.rs     - reports
   backup.rs     - snapshots
   doctor.rs     - preflight diagnostics

@@ -135,6 +135,21 @@ pub fn sysctl_write(key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn normalize_value(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub fn equivalent(left: &str, right: &str) -> bool {
+    normalize_value(left) == normalize_value(right)
+}
+
+pub fn write_sysfs(path: &Path, value: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        ensure_dir(parent)?;
+    }
+    fs::write(path, format!("{}\n", value)).with_context(|| format!("write {}", path.display()))
+}
+
 pub fn sha256_file(path: &Path) -> String {
     if !path.exists() {
         return "missing".to_string();

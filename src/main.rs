@@ -1,25 +1,10 @@
-mod apply;
-mod backup;
-mod benchmark;
-mod calc;
-mod cli;
-mod config;
-mod detect;
-mod doctor;
-mod fetch;
-mod hardware;
-mod inspect;
-mod monitor;
-mod plan;
-mod report;
-mod tx;
-mod util;
-
-use crate::cli::{Cli, Commands, ConfigAction};
-use crate::detect::detect;
-use crate::plan::build_plan;
 use anyhow::Result;
 use clap::Parser;
+use kernyx::cli::{Cli, Commands, ConfigAction, OptimizeAction};
+use kernyx::{
+    apply, backup, benchmark, calc, config, detect, doctor, fetch, inspect, monitor, optimize,
+    persist, plan, report, tx, util,
+};
 
 fn main() {
     std::panic::set_hook(Box::new(|info| {
@@ -42,28 +27,32 @@ fn main() {
     if args.yes {
         std::env::set_var("KERNYX_YES", "1");
     }
-    // logging simple
-    if !args.quiet {
-        println!("KERNYX 2.0.0");
-    }
-    let profile = args
-        .profile
-        .clone()
-        .unwrap_or_else(|| "automatic".to_string());
 
-    let res = run(args, profile);
-    if let Err(e) = res {
+    let suppress_banner = args.quiet
+        || args.json
+        || matches!(
+            args.command,
+            Some(Commands::Optimize { .. })
+                | Some(Commands::Monitor)
+                | Some(Commands::Fetch)
+                | Some(Commands::Benchmark { .. })
+        );
+    if !suppress_banner {
+        println!("KERNYX {}", env!("CARGO_PKG_VERSION"));
+    }
+
+    if let Err(e) = run(args) {
         eprintln!("error: {}", e);
         std::process::exit(1);
     }
 }
 
-fn run(args: Cli, profile: String) -> Result<()> {
+fn run(args: Cli) -> Result<()> {
     match args.command {
         Some(Commands::Fetch) => fetch::run(),
         Some(Commands::Monitor) => monitor::run(),
         None => {
-            let hw = detect();
+            let hw = detect::detect();
             println!(
                 "Host: {} | {} | {} | {} CPUs | {} MiB RAM",
                 hw.os_pretty, hw.os_kernel, hw.os_cloud, hw.cpu_effective, hw.ram_mb
@@ -74,57 +63,79 @@ fn run(args: Cli, profile: String) -> Result<()> {
             Ok(())
         }
         Some(Commands::Detect) => {
-            let hw = detect();
+            let hw = detect::detect();
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&hw)?);
             } else {
                 println!("OS: {}", hw.os_pretty);
                 println!("Kernel: {}", hw.os_kernel);
-                println!("CPU: {} ({} effective)", hw.cpu_model, hw.cpu_effective);
+                println!("CPU: {} ({})", hw.cpu_model, hw.cpu_label());
                 println!("RAM: {} MiB", hw.ram_mb);
-                println!("Storage: {}", hw.storage_class);
+                println!(
+                    "Storage: {} ({}, {})",
+                    hw.storage_class, hw.storage_device, hw.storage_fs
+                );
+                println!("Network: {} ({})", hw.nic_iface, hw.nic_driver);
                 println!("Cloud: {}", hw.os_cloud);
                 println!("Virtual: {}", hw.is_virtual);
+                println!("Workload: {}", hw.workload);
             }
             Ok(())
         }
         Some(Commands::Analyze) => {
-            let hw = detect();
+            let profile = args
+                .profile
+                .clone()
+                .unwrap_or_else(|| "automatic".to_string());
+            let hw = detect::detect();
             let c = calc::calculate(&hw, &profile);
-            let plan = build_plan(&hw, &c, &profile);
+            let plan = plan::build_plan(&hw, &c, &profile, false);
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&plan)?);
             } else {
-                println!("Profile: {}", profile);
-                println!(
-                    "Proposed changes: {}",
-                    plan.iter().filter(|p| !p.skip).count()
-                );
+                println!("Profile: {} ({})", c.profile, profile);
+                let planned = plan.iter().filter(|p| p.status == "planned").count();
+                println!("Proposed changes: {planned}");
                 for p in &plan {
-                    if p.skip {
-                        println!("  [advice] {} - {}", p.id, p.value);
-                    } else {
-                        println!("  {} : {} -> {} ({})", p.id, p.current, p.value, p.risk);
+                    match p.status.as_str() {
+                        "planned" => {
+                            println!("  {} : {} -> {} ({})", p.id, p.current, p.value, p.risk)
+                        }
+                        "unchanged" => println!("  [ok] {} ({})", p.id, p.current),
+                        "unsupported" => println!("  [unsupported] {} - {}", p.id, p.reason),
+                        "skipped" => println!("  [skip] {} - {}", p.id, p.reason),
+                        _ => println!("  [{}] {} - {}", p.status, p.id, p.value),
                     }
                 }
             }
             Ok(())
         }
         Some(Commands::Optimize {
-            profile: p,
-            dry_run,
-        }) => {
-            if dry_run {
-                std::env::set_var("KERNYX_DRY_RUN", "1");
-            }
-            let profile = p.unwrap_or(profile);
-            let hw = detect();
-            let c = calc::calculate(&hw, &profile);
-            let plan = build_plan(&hw, &c, &profile);
-            apply::apply_preflight(&hw)?;
-            // drift not checked for simplicity
-            apply::apply_execute_plan(&hw, &profile, &plan)
-        }
+            action,
+            server,
+            safe,
+            performance,
+            categories,
+            swap,
+            enable_rps,
+        }) => match action {
+            Some(OptimizeAction::Status) => optimize::status(args.json),
+            Some(OptimizeAction::Rollback { tx }) => optimize::rollback(tx),
+            None => optimize::run(optimize::Options {
+                profile: args.profile.clone(),
+                safe,
+                server,
+                performance,
+                non_interactive: args.non_interactive,
+                categories,
+                swap,
+                enable_rps,
+                dry_run: args.dry_run,
+                yes: args.yes,
+                json: args.json,
+                quiet: args.quiet,
+            }),
+        },
         Some(Commands::Health) => inspect::health(),
         Some(Commands::Process) => inspect::process(),
         Some(Commands::Network) => inspect::network(),
@@ -140,7 +151,7 @@ fn run(args: Cli, profile: String) -> Result<()> {
                 benchmark::run(&command)
             }
         }
-        Some(Commands::Doctor) => doctor::run(&detect()),
+        Some(Commands::Doctor) => doctor::run(&detect::detect()),
         Some(Commands::Backup { label }) => {
             let id = backup::create(label.as_deref().unwrap_or("manual"))?;
             println!("Snapshot created: {}", id);
@@ -160,12 +171,19 @@ fn run(args: Cli, profile: String) -> Result<()> {
             for t in txs.iter().rev().take(5) {
                 println!("  {} {} {} {}", t.0, t.1, t.3, t.2);
             }
-            // sysctl drop-in
-            let p = util::rooted("/etc/sysctl.d/99-kernyx.conf");
+            let current = util::rooted(persist::SYSCTL_PATH);
+            let legacy = persist::legacy_managed();
             println!(
                 "Persistence: {}",
-                if p.exists() { "present" } else { "absent" }
+                if current.exists() {
+                    "present (managed)"
+                } else if !legacy.is_empty() {
+                    "legacy drop-in"
+                } else {
+                    "absent"
+                }
             );
+            println!("Run 'kernyx optimize status' for optimizer details.");
             Ok(())
         }
         Some(Commands::Report) => report::show_report(),
@@ -192,7 +210,7 @@ fn run(args: Cli, profile: String) -> Result<()> {
             ConfigAction::Validate => config::validate(),
         },
         Some(Commands::Version) => {
-            println!("kernyx 2.0.0");
+            println!("kernyx {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some(Commands::Uninstall) => {
