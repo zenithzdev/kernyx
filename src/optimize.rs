@@ -1156,7 +1156,7 @@ pub fn rollback(tx_id: Option<String>) -> Result<()> {
             "--dry-run cannot be combined with rollback; remove --dry-run to roll back"
         ));
     }
-    if run_cmd_lossy("id", &["-u"]) != "0" {
+    if !crate::util::is_root() {
         return Err(anyhow::anyhow!(
             "Rolling back changes requires root. Re-run with sudo."
         ));

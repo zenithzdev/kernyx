@@ -1,4 +1,5 @@
 use crate::util::*;
+use crate::util::{read_file, rooted};
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
@@ -17,8 +18,8 @@ pub fn create(label: &str) -> Result<String> {
         id,
         now_iso(),
         label,
-        run_cmd_lossy("hostname", &[]),
-        run_cmd_lossy("uname", &["-r"])
+        read_file(&rooted("/proc/sys/kernel/hostname")),
+        read_file(&rooted("/proc/sys/kernel/osrelease"))
     );
     fs::write(dir.join("meta"), meta)?;
     let legacy = crate::persist::legacy_managed();

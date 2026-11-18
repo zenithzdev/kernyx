@@ -1,7 +1,7 @@
 use crate::hardware::Hardware;
-use crate::util::{read_file, read_int_file, rooted, run_cmd_lossy, sysctl_proc_path};
+use crate::util::{read_file, read_int_file, rooted, sysctl_proc_path};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub fn detect() -> Hardware {
     let mut hw = Hardware::default();
@@ -101,17 +101,17 @@ fn detect_os(hw: &mut Hardware) {
             .trim()
             .to_string();
     }
-    hw.os_kernel = run_cmd_lossy("uname", &["-r"]);
-    hw.os_arch = run_cmd_lossy("uname", &["-m"]);
-    if hw.os_arch.is_empty() {
-        hw.os_arch = std::env::consts::ARCH.to_string();
+    hw.os_kernel = read_file(&rooted("/proc/sys/kernel/osrelease"));
+    if hw.os_kernel.is_empty() {
+        let version = read_file(&rooted("/proc/version"));
+        hw.os_kernel = version.split_whitespace().nth(2).unwrap_or("").to_string();
     }
+    hw.os_arch = std::env::consts::ARCH.to_string();
 
     hw.os_pve = rooted("/etc/pve").exists() || rooted("/usr/bin/pveversion").exists();
 
     hw.os_is_container = is_container();
-    let virt = run_cmd_lossy("systemd-detect-virt", &[]);
-    hw.os_virt = if virt == "none" { String::new() } else { virt };
+    hw.os_virt = String::new();
     if hw.os_virt.is_empty() {
         let product = read_file(&rooted("/sys/class/dmi/id/product_name"));
         let vendor = read_file(&rooted("/sys/class/dmi/id/sys_vendor"));
@@ -152,9 +152,7 @@ fn detect_os(hw: &mut Hardware) {
         hw.os_cloud = "hetzner".to_string();
     }
 
-    hw.os_systemd_running = rooted("/run/systemd/system").exists()
-        || run_cmd_lossy("systemctl", &["is-system-running"]) == "running"
-        || run_cmd_lossy("systemctl", &["is-system-running"]) == "degraded";
+    hw.os_systemd_running = rooted("/run/systemd/system").exists();
     hw.os_supported = matches!(
         hw.os_id.as_str(),
         "ubuntu"
@@ -237,29 +235,41 @@ fn detect_cpu(hw: &mut Hardware) {
         }
     }
 
-    // lscpu is more portable on ARM and gives a reliable physical core map.
-    let lscpu = run_cmd_lossy("lscpu", &["-p=CPU,CORE,SOCKET"]);
-    if !lscpu.is_empty() {
-        let mut ls_cores = BTreeSet::new();
-        let mut ls_sockets = BTreeSet::new();
-        let mut ls_threads = 0i64;
-        for line in lscpu.lines().filter(|l| !l.starts_with('#')) {
-            let cols: Vec<&str> = line.split(',').collect();
-            if cols.len() >= 3 {
-                ls_threads += 1;
-                ls_cores.insert((cols[2].to_string(), cols[1].to_string()));
-                ls_sockets.insert(cols[2].to_string());
+    if let Ok(rd) = std::fs::read_dir(rooted("/sys/devices/system/cpu")) {
+        let mut sys_threads = 0i64;
+        let mut sys_cores = BTreeSet::new();
+        let mut sys_sockets = BTreeSet::new();
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with("cpu")
+                || name[3..].chars().any(|c| !c.is_ascii_digit())
+                || name == "cpuidle"
+            {
+                continue;
+            }
+            sys_threads += 1;
+            let topo = format!("/sys/devices/system/cpu/{}/topology", name);
+            let core = read_file(&rooted(&format!("{}/core_id", topo)));
+            let socket = read_file(&rooted(&format!("{}/physical_package_id", topo)));
+            if !core.is_empty() {
+                sys_cores.insert((socket.clone(), core));
+            }
+            if !socket.is_empty() {
+                sys_sockets.insert(socket);
             }
         }
-        if ls_threads > 0 {
-            threads = ls_threads;
-            cores = ls_cores;
-            sockets = ls_sockets;
+        if sys_threads > 0 {
+            threads = sys_threads;
+            if !sys_cores.is_empty() {
+                cores = sys_cores;
+            }
+            if !sys_sockets.is_empty() {
+                sockets = sys_sockets;
+            }
         }
     }
 
-    let nproc = run_cmd_lossy("nproc", &[]);
-    let effective: i64 = nproc.parse().unwrap_or(threads.max(1));
+    let effective: i64 = threads.max(1);
     hw.cpu_effective = effective;
     hw.cpu_vendor = if vendor.is_empty() {
         "unknown".to_string()
@@ -422,12 +432,14 @@ fn detect_storage(hw: &mut Hardware) {
     let mut source = String::new();
     let mut fstype = String::new();
     let mut options = String::new();
-    let findmnt = run_cmd_lossy("findmnt", &["-no", "SOURCE,FSTYPE,OPTIONS", "/"]);
-    if !findmnt.is_empty() {
-        let mut parts = findmnt.split_whitespace();
-        source = parts.next().unwrap_or("").to_string();
-        fstype = parts.next().unwrap_or("").to_string();
-        options = parts.collect::<Vec<_>>().join(" ");
+    for line in read_file(&rooted("/proc/mounts")).lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() >= 4 && cols[1] == "/" {
+            source = cols[0].to_string();
+            fstype = cols[2].to_string();
+            options = cols[3].to_string();
+            break;
+        }
     }
     if source.is_empty() {
         for line in read_file(&rooted("/proc/mounts")).lines() {
@@ -519,48 +531,67 @@ fn current_choice(raw: &str) -> String {
 }
 
 fn resolve_disk(source: &str) -> String {
-    if !source.starts_with("/dev/") {
-        return String::new();
-    }
-    let mut current = source.to_string();
-    for _ in 0..5 {
-        let name = Path::new(&current)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        if name.is_empty() {
-            return String::new();
-        }
-        let parent = run_cmd_lossy("lsblk", &["-ndo", "PKNAME", &current]);
-        let parent = parent.lines().next().unwrap_or("").trim().to_string();
-        if parent.is_empty() {
-            // LVM/dm can expose the physical slave directly.
-            let slaves = format!("/sys/block/{name}/slaves");
-            if let Ok(rd) = std::fs::read_dir(rooted(&slaves)) {
-                if let Some(entry) = rd.flatten().next() {
-                    let slave = entry.file_name().to_string_lossy().to_string();
-                    if !slave.is_empty() {
-                        current = format!("/dev/{slave}");
-                        continue;
+    // Resolve a mount source such as /dev/root or /dev/nvme0n1p1 to its
+    // underlying disk name using sysfs, without shelling out to lsblk.
+    let path = std::path::Path::new(source);
+    if let Ok(meta) = std::fs::metadata(path) {
+        use std::os::unix::fs::MetadataExt;
+        let rdev = meta.rdev();
+        if rdev != 0 {
+            let major = (rdev >> 8) & 0xfff;
+            let minor = rdev & 0xff;
+            let sys = format!("/sys/dev/block/{}:{}", major, minor);
+            if let Ok(link) = std::fs::read_link(rooted(&sys)) {
+                let name = link
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if !name.is_empty() {
+                    let disk = if name.starts_with("nvme") {
+                        if let Some(pos) = name.rfind('p') {
+                            let suffix = &name[pos + 1..];
+                            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
+                                name[..pos].to_string()
+                            } else {
+                                name.clone()
+                            }
+                        } else {
+                            name.clone()
+                        }
+                    } else {
+                        name.trim_end_matches(|c: char| c.is_ascii_digit())
+                            .to_string()
+                    };
+                    if !disk.is_empty() {
+                        return disk;
                     }
                 }
             }
-            return name;
         }
-        current = if parent.starts_with("/dev/") {
-            parent
-        } else {
-            format!("/dev/{parent}")
-        };
     }
-    Path::new(&current)
+    let name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if name.starts_with("nvme") {
+        if let Some(pos) = name.rfind('p') {
+            let suffix = &name[pos + 1..];
+            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
+                name[..pos].to_string()
+            } else {
+                name
+            }
+        } else {
+            name
+        }
+    } else {
+        name.trim_end_matches(|c: char| c.is_ascii_digit())
+            .to_string()
+    }
 }
 
 fn detect_network(hw: &mut Hardware) {
-    let route = run_cmd_lossy("ip", &["route", "show", "default"]);
+    let route = String::new();
     let mut iface = String::new();
     let mut it = route.split_whitespace();
     while let Some(t) = it.next() {
@@ -594,17 +625,7 @@ fn detect_network(hw: &mut Hardware) {
         let base = format!("/sys/class/net/{}", hw.nic_iface);
         let mut speed = read_int_file(&rooted(&format!("{base}/speed")), 0);
         if speed <= 0 {
-            let ethtool = run_cmd_lossy("ethtool", &[&hw.nic_iface]);
-            for line in ethtool.lines() {
-                if let Some(v) = line.trim().strip_prefix("Speed:") {
-                    speed = v
-                        .trim()
-                        .trim_end_matches("Mb/s")
-                        .trim()
-                        .parse()
-                        .unwrap_or(0);
-                }
-            }
+            speed = 1000;
         }
         hw.max_nic_mbps = if speed > 0 { speed } else { 1000 };
 
@@ -619,12 +640,7 @@ fn detect_network(hw: &mut Hardware) {
                     .unwrap_or_default()
             });
         if hw.nic_driver.is_empty() {
-            let ethtool = run_cmd_lossy("ethtool", &["-i", &hw.nic_iface]);
-            for line in ethtool.lines() {
-                if let Some(v) = line.strip_prefix("driver:") {
-                    hw.nic_driver = v.trim().to_string();
-                }
-            }
+            // Driver name unavailable from sysfs; keep empty.
         }
 
         if let Ok(rd) = std::fs::read_dir(rooted(&format!("{base}/queues"))) {
@@ -660,9 +676,8 @@ fn detect_network(hw: &mut Hardware) {
     hw.tcp_available_cc = sysctl("net.ipv4.tcp_available_congestion_control");
     hw.default_qdisc = sysctl("net.core.default_qdisc");
     hw.has_bbr = hw.tcp_available_cc.split_whitespace().any(|c| c == "bbr")
-        || run_cmd_lossy("modinfo", &["-n", "tcp_bbr"]).contains("tcp_bbr");
-    hw.has_fq = rooted("/sys/module/sch_fq").exists()
-        || run_cmd_lossy("modinfo", &["-n", "sch_fq"]).contains("sch_fq");
+        || rooted("/sys/module/tcp_bbr").exists();
+    hw.has_fq = rooted("/sys/module/sch_fq").exists();
     hw.conntrack_max = sysctl("net.netfilter.nf_conntrack_max")
         .parse()
         .unwrap_or(0);
@@ -722,15 +737,19 @@ fn detect_network(hw: &mut Hardware) {
 }
 
 fn detect_workload(hw: &mut Hardware) {
-    let ps = run_cmd_lossy("ps", &["-eo", "comm="]);
-    let mut names: Vec<String> = if ps.is_empty() {
-        Vec::new()
-    } else {
-        ps.lines()
-            .map(|l| l.trim().to_lowercase())
-            .filter(|l| !l.is_empty())
-            .collect()
-    };
+    let mut names: Vec<String> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(rooted("/proc")) {
+        for entry in rd.flatten() {
+            let pid = entry.file_name().to_string_lossy().to_string();
+            if !pid.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            let comm = read_file(&entry.path().join("comm")).to_lowercase();
+            if !comm.is_empty() {
+                names.push(comm);
+            }
+        }
+    }
     if names.is_empty() {
         if let Ok(rd) = std::fs::read_dir(rooted("/proc")) {
             for entry in rd.flatten() {

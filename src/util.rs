@@ -59,35 +59,40 @@ pub fn run_cmd_lossy(program: &str, args: &[&str]) -> String {
 }
 
 pub fn have(program: &str) -> bool {
-    Command::new("command")
-        .arg("-v")
-        .arg(program)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-        || std::process::Command::new(program)
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+    let path = std::env::var("PATH").unwrap_or_default();
+    for dir in path.split(':') {
+        let candidate = Path::new(dir).join(program);
+        if candidate.is_file() {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn now_iso() -> String {
-    // Simple UTC timestamp without chrono dependency.
-    let out = run_cmd_lossy("date", &["-u", "+%Y-%m-%dT%H:%M:%SZ"]);
-    if out.is_empty() {
-        "unknown".to_string()
-    } else {
-        out
-    }
+    format_time("%Y-%m-%dT%H:%M:%SZ")
 }
 
 pub fn timestamp_id() -> String {
-    let out = run_cmd_lossy("date", &["-u", "+%Y%m%dT%H%M%SZ"]);
-    if out.is_empty() {
-        "00000000T000000Z".to_string()
-    } else {
-        out
+    format_time("%Y%m%dT%H%M%SZ")
+}
+
+fn format_time(fmt: &str) -> String {
+    use libc::{gmtime_r, strftime, time, tm};
+    use std::ffi::CStr;
+    unsafe {
+        let mut t: libc::time_t = 0;
+        time(&mut t);
+        let mut tm: tm = std::mem::zeroed();
+        if gmtime_r(&t, &mut tm).is_null() {
+            return "unknown".to_string();
+        }
+        let mut buf = [0i8; 64];
+        let written = strftime(buf.as_mut_ptr(), buf.len(), fmt.as_ptr() as *const _, &tm);
+        if written == 0 {
+            return "unknown".to_string();
+        }
+        CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned()
     }
 }
 
@@ -97,6 +102,17 @@ pub fn rand_suffix() -> String {
     let mut h = DefaultHasher::new();
     std::time::SystemTime::now().hash(&mut h);
     format!("{:x}", h.finish() & 0xffffff)
+}
+
+pub fn is_root() -> bool {
+    let status = fs::read_to_string("/proc/self/status").unwrap_or_default();
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("Uid:") {
+            let uid = rest.split_whitespace().next().unwrap_or("1");
+            return uid == "0";
+        }
+    }
+    false
 }
 
 pub fn ensure_dir(path: &Path) -> Result<()> {
@@ -109,30 +125,15 @@ pub fn sysctl_proc_path(key: &str) -> PathBuf {
 }
 
 pub fn sysctl_read(key: &str) -> String {
-    let out = run_cmd_lossy("sysctl", &["-n", key]);
-    if !out.is_empty() {
-        return out;
-    }
     read_file(&sysctl_proc_path(key))
 }
 
 pub fn sysctl_write(key: &str, value: &str) -> Result<()> {
-    let status = Command::new("sysctl")
-        .arg("-w")
-        .arg(format!("{}={}", key, value))
-        .status();
-    if let Ok(s) = status {
-        if s.success() {
-            return Ok(());
-        }
-    }
-    // fallback
     let path = sysctl_proc_path(key);
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    fs::write(&path, format!("{}\n", value))?;
-    Ok(())
+    fs::write(&path, format!("{}\n", value)).with_context(|| format!("write {}", path.display()))
 }
 
 pub fn normalize_value(value: &str) -> String {
@@ -154,11 +155,14 @@ pub fn sha256_file(path: &Path) -> String {
     if !path.exists() {
         return "missing".to_string();
     }
-    let out = run_cmd_lossy("sha256sum", &[path.to_str().unwrap_or("")]);
-    out.split_whitespace()
-        .next()
-        .unwrap_or("missing")
-        .to_string()
+    use sha2::{Digest, Sha256};
+    let data = match fs::read(path) {
+        Ok(d) => d,
+        Err(_) => return "missing".to_string(),
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(&data);
+    format!("{:x}", hasher.finalize())
 }
 
 pub fn atomic_write(path: &Path, content: &str, mode: u32) -> Result<()> {

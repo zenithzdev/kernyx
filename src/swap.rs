@@ -83,28 +83,19 @@ pub fn default_path() -> PathBuf {
 }
 
 pub fn available_space_mb() -> Option<u64> {
-    let out = run_cmd_lossy("df", &["-B1", "--output=avail", "/"]);
-    let value = out
-        .lines()
-        .nth(1)
-        .and_then(|l| l.trim().parse::<u64>().ok());
-    if value.is_some() {
-        return value.map(|b| b / 1_048_576);
+    unsafe {
+        let mut stat: libc::statvfs = std::mem::zeroed();
+        let path = std::ffi::CString::new("/").ok()?;
+        if libc::statvfs(path.as_ptr(), &mut stat) == 0 {
+            let avail = stat.f_bavail as u64 * stat.f_frsize as u64;
+            Some(avail / 1_048_576)
+        } else {
+            None
+        }
     }
-    let fallback = run_cmd_lossy("df", &["-Pk", "/"]);
-    fallback
-        .lines()
-        .nth(1)
-        .and_then(|l| l.split_whitespace().nth(3))
-        .and_then(|v| v.parse::<u64>().ok())
-        .map(|kb| kb / 1024)
 }
 
 pub fn fstype() -> String {
-    let out = run_cmd_lossy("findmnt", &["-no", "FSTYPE", "/"]);
-    if !out.is_empty() {
-        return out;
-    }
     for line in read_file(&rooted("/proc/mounts")).lines() {
         let cols: Vec<&str> = line.split_whitespace().collect();
         if cols.len() >= 3 && cols[1] == "/" {
@@ -180,6 +171,24 @@ fn create_file(path: &Path, size_mb: u64) -> Result<()> {
         }
     }
 
+    let size_bytes = size_mb.saturating_mul(1024 * 1024);
+    // Allocate through posix_fallocate (Rust + libc) instead of shelling out.
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)
+        .context("create swap file")?;
+    let fd = {
+        use std::os::unix::io::AsRawFd;
+        file.as_raw_fd()
+    };
+    let rc = unsafe { libc::posix_fallocate(fd, 0, size_bytes as libc::off_t) };
+    drop(file);
+    if rc == 0 && path.exists() {
+        return Ok(());
+    }
+    // Fallback to fallocate binary if posix_fallocate is unsupported.
     let size_arg = format!("{size_mb}M");
     let fallocate = std::process::Command::new("fallocate")
         .args(["-l", &size_arg, path_str.as_ref()])
@@ -187,21 +196,7 @@ fn create_file(path: &Path, size_mb: u64) -> Result<()> {
     if fallocate.map(|s| s.success()).unwrap_or(false) && path.exists() {
         return Ok(());
     }
-
-    let status = std::process::Command::new("dd")
-        .args([
-            "if=/dev/zero",
-            &format!("of={}", path.display()),
-            "bs=1M",
-            &format!("count={size_mb}"),
-            "status=none",
-        ])
-        .status()
-        .context("dd is required to create a swap file")?;
-    if !status.success() {
-        return Err(anyhow::anyhow!("failed to allocate swap file"));
-    }
-    Ok(())
+    Err(anyhow::anyhow!("failed to allocate swap file"))
 }
 
 fn enable_swap(path: &Path) -> Result<()> {
@@ -239,7 +234,7 @@ pub fn create(size_mb: u64) -> Result<PathBuf> {
     if is_dry_run() {
         return Ok(default_path());
     }
-    if run_cmd_lossy("id", &["-u"]) != "0" {
+    if !crate::util::is_root() {
         return Err(anyhow::anyhow!("creating swap requires root"));
     }
     if fstype().is_empty() {
@@ -264,11 +259,8 @@ pub fn create(size_mb: u64) -> Result<PathBuf> {
     }
 
     create_file(&path, size_mb)?;
-    let path_str = path.to_string_lossy();
-    let chmod = std::process::Command::new("chmod")
-        .args(["600", path_str.as_ref()])
-        .status();
-    if !chmod.map(|s| s.success()).unwrap_or(false) {
+    use std::os::unix::fs::PermissionsExt;
+    if std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).is_err() {
         let _ = fs::remove_file(&path);
         return Err(anyhow::anyhow!("failed to set swap file permissions"));
     }

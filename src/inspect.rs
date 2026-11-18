@@ -3,7 +3,12 @@ use anyhow::Result;
 use std::io::Write;
 
 pub fn cpu() -> Result<()> {
-    println!("CPU: {}", run_cmd_lossy("nproc", &[]));
+    println!(
+        "CPU: {}",
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    );
     // model
     for line in std::fs::read_to_string("/proc/cpuinfo")
         .unwrap_or_default()
@@ -67,8 +72,27 @@ pub fn network() -> Result<()> {
 }
 
 pub fn storage() -> Result<()> {
-    let out = run_cmd_lossy("df", &["-h"]);
-    println!("{}", out);
+    println!("{:>12} {:>12} {:>12} Mountpoint", "Size", "Used", "Avail");
+    for line in std::fs::read_to_string("/proc/mounts")
+        .unwrap_or_default()
+        .lines()
+    {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 2 {
+            continue;
+        }
+        let mount = cols[1];
+        unsafe {
+            let mut stat: libc::statvfs = std::mem::zeroed();
+            let cpath = std::ffi::CString::new(mount).unwrap_or_default();
+            if libc::statvfs(cpath.as_ptr(), &mut stat) == 0 {
+                let size = stat.f_blocks as u64 * stat.f_frsize as u64 / 1_048_576;
+                let avail = stat.f_bavail as u64 * stat.f_frsize as u64 / 1_048_576;
+                let used = size.saturating_sub(avail);
+                println!("{:>9} MiB {:>9} MiB {:>9} MiB {}", size, used, avail, mount);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -96,13 +120,14 @@ pub fn security() -> Result<()> {
             .unwrap_or_default()
             .len()
     );
-    let fw = run_cmd_lossy("ufw", &["status"]);
+    let ufw_conf = std::fs::read_to_string(rooted("/etc/ufw/ufw.conf")).unwrap_or_default();
+    let enabled = ufw_conf.lines().any(|l| l.trim() == "ENABLED=yes");
     println!(
         "Firewall: {}",
-        if fw.is_empty() {
-            "ufw not available or inactive"
+        if enabled {
+            "ufw enabled"
         } else {
-            &fw
+            "ufw not available or inactive"
         }
     );
     Ok(())

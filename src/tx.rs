@@ -105,7 +105,7 @@ fn write_meta(dir: &Path, id: &str, profile: &str, hw: &Hardware) -> Result<()> 
     let version = env!("CARGO_PKG_VERSION");
     let content = format!(
         "txid={}\ncreated={}\nprofile={}\nprofile_name={}\nhostname={}\nkernel={}\ncpu={}\ncpu_effective={}\nram_mb={}\nvirtual={}\npve={}\ncloud={}\nversion={version}\nstatus=open\n",
-        id, now_iso(), profile, profile, run_cmd_lossy("hostname", &[]), run_cmd_lossy("uname", &["-r"]),
+        id, now_iso(), profile, profile, read_file(&rooted("/proc/sys/kernel/hostname")), read_file(&rooted("/proc/sys/kernel/osrelease")),
         hw.cpu_model, hw.cpu_effective, hw.ram_mb, hw.is_virtual, hw.os_pve, hw.os_cloud
     );
     fs::write(dir.join("meta"), content)?;

@@ -445,9 +445,6 @@ pub fn write_udev_rules(plan: &[PlanItem]) -> Result<Vec<FileChange>> {
     if write_file(&path, &content, "persist.udev")? {
         written.push(written_change(&path));
     }
-    if !is_dry_run() {
-        let _ = run_cmd("udevadm", &["control", "--reload-rules"]);
-    }
     Ok(written)
 }
 

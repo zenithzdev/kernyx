@@ -27,7 +27,7 @@ pub fn preflight(hw: &Hardware) -> Result<()> {
 }
 
 fn is_root() -> bool {
-    run_cmd_lossy("id", &["-u"]) == "0"
+    crate::util::is_root()
 }
 
 fn choice(raw: &str) -> String {

@@ -52,5 +52,5 @@ pub fn run(hw: &Hardware) -> Result<()> {
 }
 
 fn is_root() -> bool {
-    crate::util::run_cmd_lossy("id", &["-u"]) == "0"
+    crate::util::is_root()
 }
