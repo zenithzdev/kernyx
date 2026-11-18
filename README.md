@@ -224,6 +224,20 @@ Upstream licenses are preserved in `third_party/` and `vendor/btop/`.
 
 See [`docs/COMMANDS.md`](docs/COMMANDS.md) for screenshots and short descriptions of every command.
 
+### Preview
+
+![kernyx fetch](docs/screenshots/fetch.png)
+
+![kernyx optimize --dry-run](docs/screenshots/optimize.png)
+
+![kernyx monitor](docs/screenshots/monitor.png)
+
+![kernyx detect](docs/screenshots/detect.png)
+
+![kernyx analyze](docs/screenshots/analyze.png)
+
+![kernyx status](docs/screenshots/status.png)
+
 ---
 
 ## Safety model
