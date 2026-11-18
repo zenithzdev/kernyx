@@ -1,5 +1,11 @@
 # Authors
 
-KERNYX is designed, developed and maintained by KERNYX Contributors.
+KERNYX is designed, developed and maintained by:
 
-Copyright (c) 2026 KERNYX Contributors.
+    Zenithz Dev <maintainers@zenithzcloud.com>
+    https://github.com/zenithzdev/kernyx
+
+Copyright (c) 2026 Zenithz Dev.
+
+KERNYX bundles third-party components. Their authors and
+licenses are listed in THIRD_PARTY_NOTICES.md and remain in force.

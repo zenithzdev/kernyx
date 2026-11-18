@@ -35,7 +35,7 @@ jobs:
           Section: admin
           Priority: optional
           Architecture: amd64
-          Maintainer: Kernyx Contributors
+          Maintainer: Zenithz Dev <maintainers@zenithzcloud.com>
           Description: Adaptive Linux Performance Optimization Engine
            KERNYX detects hardware, analyzes the system and applies
            safe kernel-level optimizations transactionally.
