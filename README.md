@@ -66,6 +66,17 @@ sudo rm /etc/apt/sources.list.d/kernyx.list
 sudo rm /etc/apt/keyrings/kernyx.gpg
 ```
 
+## What KERNYX does
+
+- Deep hardware and workload detection (CPU, NUMA, memory, storage, NIC, kernel, services)
+- Adaptive kernel tuning with Safe / Server (default) / Performance / Custom profiles
+- Memory, I/O, network, limits, THP, NUMA, IRQ, and swap optimization
+- Interactive swap creation with fstab persistence
+- Transactional apply with backups, verification, and rollback
+- Before/after telemetry and load analysis
+- Premium CLI with progress, checkmarks, and plain/JSON fallbacks
+
+
 ---
 
 ## APT Repository
