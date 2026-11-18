@@ -72,6 +72,10 @@ pub struct Calc {
     pub dirty_bg_bytes: i64,
     pub dirty_bytes: i64,
     pub dirty_expire: i64,
+    pub watermark_scale_factor: i64,
+    pub page_cluster: i64,
+    pub compaction_proactiveness: i64,
+    pub zone_reclaim_mode: i64,
     pub file_max: i64,
     pub nr_open: i64,
     pub pid_max: i64,
@@ -241,6 +245,11 @@ pub fn calculate(hw: &Hardware, profile: &str) -> Calc {
         "hdd" => 3000,
         _ => 2000,
     };
+
+    c.watermark_scale_factor = if p.is_performance() { 50 } else { 10 };
+    c.page_cluster = if storage == "hdd" { 3 } else { 0 };
+    c.compaction_proactiveness = if p.is_performance() { 0 } else { 20 };
+    c.zone_reclaim_mode = 0;
 
     // Descriptor and process ceilings. These are raised, never lowered.
     let mut file_max = ram.saturating_mul(128);

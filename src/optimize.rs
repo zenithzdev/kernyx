@@ -10,6 +10,8 @@ use crate::ui::{Mark, Ui};
 use crate::util::{now_iso, run_cmd_lossy, sysctl_read};
 use anyhow::Result;
 use std::io::{self, IsTerminal, Write};
+use std::thread::sleep;
+use std::time::Duration;
 
 pub struct Options {
     pub profile: Option<String>,
@@ -24,6 +26,250 @@ pub struct Options {
     pub yes: bool,
     pub json: bool,
     pub quiet: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct Telemetry {
+    pub load1: f64,
+    pub load5: f64,
+    pub load15: f64,
+    pub cpu_idle_pct: f64,
+    pub io_wait_pct: f64,
+    pub steal_pct: f64,
+    pub mem_available_mb: i64,
+    pub swap_used_mb: i64,
+    pub psi_memory_avg10: f64,
+    pub psi_io_avg10: f64,
+    pub process_count: i64,
+}
+
+pub fn capture_telemetry() -> Telemetry {
+    let (idle1, iowait1, steal1, total1) = cpu_stat();
+    sleep(Duration::from_millis(1000));
+    let (idle2, iowait2, steal2, total2) = cpu_stat();
+    let total_delta = (total2 - total1).max(1) as f64;
+    let idle_pct = (idle2 - idle1) as f64 * 100.0 / total_delta;
+    let iowait_pct = (iowait2 - iowait1) as f64 * 100.0 / total_delta;
+    let steal_pct = (steal2 - steal1) as f64 * 100.0 / total_delta;
+
+    let (_mem_total, mem_avail, swap_total, swap_free) = mem_info();
+    let psi_mem = psi_avg10("/proc/pressure/memory");
+    let psi_io = psi_avg10("/proc/pressure/io");
+    let proc_count = process_count();
+    let (l1, l5, l15) = loadavg();
+
+    Telemetry {
+        load1: l1,
+        load5: l5,
+        load15: l15,
+        cpu_idle_pct: idle_pct,
+        io_wait_pct: iowait_pct,
+        steal_pct,
+        mem_available_mb: mem_avail,
+        swap_used_mb: (swap_total - swap_free).max(0),
+        psi_memory_avg10: psi_mem,
+        psi_io_avg10: psi_io,
+        process_count: proc_count,
+    }
+}
+
+fn cpu_stat() -> (i64, i64, i64, i64) {
+    let line = std::fs::read_to_string("/proc/stat").unwrap_or_default();
+    let first = line.lines().next().unwrap_or("");
+    let nums: Vec<i64> = first
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|v| v.parse().ok())
+        .collect();
+    // user nice system idle iowait irq softirq steal guest guest_nice
+    let idle = nums.get(3).copied().unwrap_or(0);
+    let iowait = nums.get(4).copied().unwrap_or(0);
+    let steal = nums.get(7).copied().unwrap_or(0);
+    let total: i64 = nums.iter().sum();
+    (idle, iowait, steal, total)
+}
+
+fn mem_info() -> (i64, i64, i64, i64) {
+    let text = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    let mut total = 0i64;
+    let mut avail = 0i64;
+    let mut swap_total = 0i64;
+    let mut swap_free = 0i64;
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let value: i64 = parts[1].parse().unwrap_or(0);
+        match parts[0] {
+            "MemTotal:" => total = value / 1024,
+            "MemAvailable:" => avail = value / 1024,
+            "SwapTotal:" => swap_total = value / 1024,
+            "SwapFree:" => swap_free = value / 1024,
+            _ => {}
+        }
+    }
+    (total, avail, swap_total, swap_free)
+}
+
+fn psi_avg10(path: &str) -> f64 {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("some ") {
+            for field in rest.split_whitespace() {
+                if let Some(v) = field.strip_prefix("avg10=") {
+                    return v.parse().unwrap_or(0.0);
+                }
+            }
+        }
+    }
+    0.0
+}
+
+fn process_count() -> i64 {
+    std::fs::read_dir("/proc")
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| {
+                    e.file_name()
+                        .to_string_lossy()
+                        .chars()
+                        .all(|c| c.is_ascii_digit())
+                })
+                .count() as i64
+        })
+        .unwrap_or(0)
+}
+
+fn loadavg() -> (f64, f64, f64) {
+    let text = std::fs::read_to_string("/proc/loadavg").unwrap_or_default();
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    let l1 = parts.first().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let l5 = parts.get(1).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let l15 = parts.get(2).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    (l1, l5, l15)
+}
+
+pub fn print_telemetry(ui: &Ui, before: &Telemetry, after: &Telemetry) {
+    if !ui.visible() {
+        return;
+    }
+    ui.section("Before / after telemetry");
+    println!("  {:<18} {:>10} {:>10}", "Metric", "Before", "After");
+    println!(
+        "  {:<18} {:>10.2} {:>10.2}",
+        "Load (1m)", before.load1, after.load1
+    );
+    println!(
+        "  {:<18} {:>9.1}% {:>9.1}%",
+        "CPU idle", before.cpu_idle_pct, after.cpu_idle_pct
+    );
+    println!(
+        "  {:<18} {:>9.1}% {:>9.1}%",
+        "I/O wait", before.io_wait_pct, after.io_wait_pct
+    );
+    println!(
+        "  {:<18} {:>9.1}% {:>9.1}%",
+        "Steal", before.steal_pct, after.steal_pct
+    );
+    println!(
+        "  {:<18} {:>7} MiB {:>7} MiB",
+        "Available RAM", before.mem_available_mb, after.mem_available_mb
+    );
+    println!(
+        "  {:<18} {:>7} MiB {:>7} MiB",
+        "Swap used", before.swap_used_mb, after.swap_used_mb
+    );
+    println!(
+        "  {:<18} {:>10.2} {:>10.2}",
+        "PSI memory", before.psi_memory_avg10, after.psi_memory_avg10
+    );
+    println!(
+        "  {:<18} {:>10.2} {:>10.2}",
+        "PSI I/O", before.psi_io_avg10, after.psi_io_avg10
+    );
+    println!(
+        "  {:<18} {:>10} {:>10}",
+        "Processes", before.process_count, after.process_count
+    );
+    ui.note("Telemetry is measured; no result is manufactured.");
+}
+
+pub fn print_service_analysis() {
+    let services = run_cmd_lossy(
+        "systemctl",
+        &[
+            "list-units",
+            "--type=service",
+            "--state=running",
+            "--no-pager",
+            "--no-legend",
+        ],
+    );
+    let mut candidates = Vec::new();
+    for line in services.lines() {
+        let name = line.split_whitespace().next().unwrap_or("");
+        if name.is_empty() {
+            continue;
+        }
+        let lower = name.to_lowercase();
+        if lower.contains("bluetooth")
+            || lower.contains("cups")
+            || lower.contains("avahi")
+            || lower.contains("modemmanager")
+            || lower.contains("whoopsie")
+            || lower.contains("apport")
+        {
+            candidates.push(name.to_string());
+        }
+    }
+    if candidates.is_empty() {
+        println!("No obvious unnecessary running services detected.");
+    } else {
+        println!("Potential unnecessary running services (review before disabling):");
+        for service in candidates {
+            println!("  - {}", service);
+        }
+        println!("KERNYX does not disable services automatically.");
+    }
+    let timers = run_cmd_lossy(
+        "systemctl",
+        &["list-timers", "--all", "--no-pager", "--no-legend"],
+    );
+    let timer_count = timers.lines().filter(|l| !l.trim().is_empty()).count();
+    println!("Active timers: {}", timer_count);
+}
+
+pub fn print_load_analysis() {
+    let t = capture_telemetry();
+    println!(
+        "Load average: {:.2} / {:.2} / {:.2}",
+        t.load1, t.load5, t.load15
+    );
+    println!(
+        "CPU idle: {:.1}%  I/O wait: {:.1}%  Steal: {:.1}%",
+        t.cpu_idle_pct, t.io_wait_pct, t.steal_pct
+    );
+    println!(
+        "Available RAM: {} MiB  Swap used: {} MiB",
+        t.mem_available_mb, t.swap_used_mb
+    );
+    println!(
+        "PSI memory avg10: {:.2}  PSI I/O avg10: {:.2}",
+        t.psi_memory_avg10, t.psi_io_avg10
+    );
+    println!("Processes: {}", t.process_count);
+    if t.io_wait_pct > 5.0 {
+        println!("Primary bottleneck hint: storage I/O (I/O wait is elevated).");
+    } else if t.steal_pct > 5.0 {
+        println!("Primary bottleneck hint: hypervisor steal time.");
+    } else if t.psi_memory_avg10 > 10.0 {
+        println!("Primary bottleneck hint: memory pressure.");
+    } else if t.load1 > t.cpu_idle_pct / 100.0 * 0.0 + 1.0 {
+        println!("Primary bottleneck hint: runnable CPU tasks or blocked tasks.");
+    } else {
+        println!("No obvious single bottleneck detected.");
+    }
 }
 
 struct Selection {
@@ -728,6 +974,7 @@ pub fn run(opts: Options) -> Result<()> {
     let hw = detect();
     let mut ui = Ui::new(opts.quiet, opts.json, opts.non_interactive);
     let swap_label = swap::summary(&hw).join("; ");
+    let baseline = capture_telemetry();
     ui.system(&hw, &swap_label);
 
     let selection = resolve_selection(&opts, &ui)?;
@@ -777,6 +1024,10 @@ pub fn run(opts: Options) -> Result<()> {
     }
 
     let (tx_id, files, verified, failures) = apply_plan(&opts, &hw, profile, &mut ui, &mut plan)?;
+    let after = capture_telemetry();
+    if !opts.json && !opts.quiet {
+        print_telemetry(&ui, &baseline, &after);
+    }
     if opts.quiet && !opts.json {
         let (applied, skipped, unsupported, failed) = counts(&plan);
         println!(

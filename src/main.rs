@@ -107,6 +107,13 @@ fn run(args: Cli) -> Result<()> {
                         _ => println!("  [{}] {} - {}", p.status, p.id, p.value),
                     }
                 }
+                if !args.json {
+                    println!();
+                    println!("Load and resource analysis:");
+                    optimize::print_load_analysis();
+                    println!();
+                    optimize::print_service_analysis();
+                }
             }
             Ok(())
         }

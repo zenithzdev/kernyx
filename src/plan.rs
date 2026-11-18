@@ -294,6 +294,49 @@ pub fn build_plan(hw: &Hardware, c: &Calc, profile: &str, enable_rps: bool) -> V
         "low",
         "Data expires to disk sooner on low-latency NVMe than on rotational media.",
     );
+
+    push_sysctl(
+        &mut items,
+        &overrides,
+        "memory",
+        "vm.watermark_scale_factor",
+        &c.watermark_scale_factor.to_string(),
+        Compare::Exact,
+        "low",
+        "Controls kswapd aggressiveness; keeps reclaim predictable on VPS memory.",
+    );
+    push_sysctl(
+        &mut items,
+        &overrides,
+        "memory",
+        "vm.page-cluster",
+        &c.page_cluster.to_string(),
+        Compare::Exact,
+        "low",
+        "Disables swap readahead on SSD/NVMe to avoid unnecessary I/O.",
+    );
+    push_sysctl(
+        &mut items,
+        &overrides,
+        "memory",
+        "vm.compaction_proactiveness",
+        &c.compaction_proactiveness.to_string(),
+        Compare::Exact,
+        "low",
+        "Limits background compaction overhead on server workloads.",
+    );
+    if hw.numa_nodes > 1 {
+        push_sysctl(
+            &mut items,
+            &overrides,
+            "memory",
+            "vm.zone_reclaim_mode",
+            &c.zone_reclaim_mode.to_string(),
+            Compare::Exact,
+            "medium",
+            "Avoids NUMA zone reclaim latency on multi-node systems.",
+        );
+    }
     if hw.overcommit_memory == 0 {
         add_advice(
             &mut items,
