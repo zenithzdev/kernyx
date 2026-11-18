@@ -58,6 +58,12 @@ for tool in curl gpg apt-get; do
     command -v "$tool" >/dev/null 2>&1 || die "Required tool missing: $tool"
 done
 
+# Remove stale KERNYX source entries from previous installations/repositories
+rm -f /etc/apt/sources.list.d/*kernyx*.list
+if [[ -f /etc/apt/sources.list ]]; then
+    sed -i '/kernyx/d' /etc/apt/sources.list
+fi
+
 install -d -m 0755 /etc/apt/keyrings
 
 TMPDIR_KY=$(mktemp -d)
