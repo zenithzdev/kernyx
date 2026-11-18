@@ -9,13 +9,13 @@ EXPECTED_FINGERPRINT="864FE821DCAF96A4B8F9F71EFB1D9A2606C3F536"
 KEYRING="/etc/apt/keyrings/kernyx.gpg"
 SOURCE_LIST="/etc/apt/sources.list.d/kernyx.list"
 
-C_RESET="\033[0m"
-C_BOLD="\033[1m"
-C_CYAN="\033[1;36m"
-C_GREEN="\033[1;32m"
-C_YELLOW="\033[1;33m"
-C_RED="\033[1;31m"
-C_DIM="\033[90m"
+C_RESET=$'\033[0m'
+C_BOLD=$'\033[1m'
+C_CYAN=$'\033[1;36m'
+C_GREEN=$'\033[1;32m'
+C_YELLOW=$'\033[1;33m'
+C_RED=$'\033[1;31m'
+C_DIM=$'\033[90m'
 
 banner() {
     printf '%s\n' "${C_CYAN}"
