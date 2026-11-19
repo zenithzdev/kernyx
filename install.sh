@@ -18,11 +18,8 @@ C_RED=$'\033[1;31m'
 C_DIM=$'\033[90m'
 
 banner() {
-    printf '%s\n' "${C_CYAN}"
-    printf '╔══════════════════════════════════════════════════════╗\n'
-    printf '║                 K E R N Y X  I N S T A L L E R       ║\n'
-    printf '║        Adaptive Linux Performance Optimization        ║\n'
-    printf '╚══════════════════════════════════════════════════════╝%s\n' "${C_RESET}"
+    printf '%sKERNYX installer%s\n' "${C_CYAN}" "${C_RESET}"
+    printf '%sAdaptive Linux Performance Optimization Engine%s\n\n' "${C_DIM}" "${C_RESET}"
 }
 
 step() {
@@ -132,8 +129,6 @@ ok "kernyx installed"
 command -v kernyx >/dev/null 2>&1 || die "kernyx executable not found after install"
 VERSION=$(kernyx version 2>/dev/null | head -1)
 
-printf '\n%s╔══════════════════════════════════════════════════════╗%s\n' "${C_GREEN}" "${C_RESET}"
-printf '%s║               INSTALLATION COMPLETE                   ║%s\n' "${C_GREEN}" "${C_RESET}"
-printf '%s╚══════════════════════════════════════════════════════╝%s\n' "${C_GREEN}" "${C_RESET}"
+printf '\n%sInstallation complete.%s\n' "${C_GREEN}" "${C_RESET}"
 printf '  Installed: %s\n' "$VERSION"
 printf '  Next:      %skernyx detect%s  or  %skernyx fetch%s\n\n' "${C_CYAN}" "${C_RESET}" "${C_CYAN}" "${C_RESET}"
