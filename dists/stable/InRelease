@@ -1,0 +1,51 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Origin: Kernyx
+Label: Kernyx
+Suite: stable
+Codename: stable
+Architectures: amd64 arm64
+Components: main
+Description: KERNYX APT Repository
+Date: Thu, 19 Nov 2026 11:24:20 +0000
+MD5Sum:
+ defd0ee0fe62897614082533e5aeaa00              177 Release
+ 80945a6daa5f4ec923a856287b781f54              620 main/binary-amd64/Packages
+ 7eb888d749df5ed0ed38b62676331039              462 main/binary-amd64/Packages.gz
+ 80945a6daa5f4ec923a856287b781f54              620 main/binary-arm64/Packages
+ 7eb888d749df5ed0ed38b62676331039              462 main/binary-arm64/Packages.gz
+SHA1:
+ 8f2a90e0ca732e38faa21591ddeed10f4497f038              177 Release
+ 89a34185a219cd241a47eebea71cd4678a279f34              620 main/binary-amd64/Packages
+ 98b7bcff8f34fc015c2649d29a496140f423bc88              462 main/binary-amd64/Packages.gz
+ 89a34185a219cd241a47eebea71cd4678a279f34              620 main/binary-arm64/Packages
+ 98b7bcff8f34fc015c2649d29a496140f423bc88              462 main/binary-arm64/Packages.gz
+SHA256:
+ 735361197c1521db2133958e8c206da95daa35ac36aa9e11f0bdc5b596afd9cb              177 Release
+ 162552542b4e503ccc5fcc53430940a363139f9e51ab2dbeb9b09e8c312dbe0d              620 main/binary-amd64/Packages
+ 0978ce72660559638915cf24c57f9c229d0eee2eab68838fe93977c1b4d2ed89              462 main/binary-amd64/Packages.gz
+ 162552542b4e503ccc5fcc53430940a363139f9e51ab2dbeb9b09e8c312dbe0d              620 main/binary-arm64/Packages
+ 0978ce72660559638915cf24c57f9c229d0eee2eab68838fe93977c1b4d2ed89              462 main/binary-arm64/Packages.gz
+SHA512:
+ 39f1c72e678e2cf079604bc5db95ad9f59e08e1990c2eb5305bf095d41450989073f52db80521b19477a109bebec9c59777b2502bb1b70e4254bd186cda23602              177 Release
+ 145d03533a66e464b6bc916c1e3f14824a37d78433118e4580e0908c5b95c18edca130d67279cc7e6bf0b2f716b4affb57b374510fa6f386881656508d8e4208              620 main/binary-amd64/Packages
+ c43032d3f6ee12212e6a7ecfd7ca59d76cd1c66c3394d2ff834e82d6437cc860990d8d1c33c7d966031bc486f77e5d305f3b9a3b315c82c768b7b065a6552ed1              462 main/binary-amd64/Packages.gz
+ 145d03533a66e464b6bc916c1e3f14824a37d78433118e4580e0908c5b95c18edca130d67279cc7e6bf0b2f716b4affb57b374510fa6f386881656508d8e4208              620 main/binary-arm64/Packages
+ c43032d3f6ee12212e6a7ecfd7ca59d76cd1c66c3394d2ff834e82d6437cc860990d8d1c33c7d966031bc486f77e5d305f3b9a3b315c82c768b7b065a6552ed1              462 main/binary-arm64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iQIzBAEBCgAdFiEE1RlI+NGMV3O+Wkrr0jHT5W5A+PsFAmr+3GQACgkQ0jHT5W5A
++PsOdQ//SCgfntcVAGAq4vzwinIvGw7LbZLuO0n5OMHZh3rbo64gtEJkzUZboNkg
++ecac9oDhxvZK9upbkqamwA9JQ8UyIly40CUx3Y6cmgMKQ6d7RB8Xa3XpbWWO26Z
+16a1o65ytJ7Oy1EQP0x7W99z5KYD4G60jRJFEjyRDmiE5l4UXBdhrbRVxOgyoJCT
+420Zvkn2N9WzeMsv+03P7XH0Lmq3nndfDGiSQqPjyYkauMkP1zBYiI70NYKc+0PO
+77xzB93c1K1Cn12ekHVmV6w1Z3X1qDNMUL8w8USsRoOR+10w7GotHFn4ZZSUBbzI
+iW8gREpx8ns2S5wDSEa8lliZLwGN1ahXbK7rIoBJUzoR4MZGP00EHDib/1Xd4BqM
+BQuDh9ybUvvEyAFy56W8fjb8VlEspzoYV69vtwOmBtKfMspORIPb7EXp244f9SQN
+PwBLVD9Kl3uIM5MO7ALH4tHiSJAffc0PB3fDjIr3ip2S6ZzlZs3TlIc5FMimcBVw
+jc2hvmlZP6miouFF4KRxraDsLTIkvDkZzq6qMKGS2He4CKdULZuYUTwq7Q2mm9Rv
+DxPDej/+N0bx7IdS0wFIFiwboEQVQ5oXR+sR4rkzwQ9nu4rkDBtVk+gEcCOIbcoZ
+AjyWAhZ7bM412ZOwCnbIqyGXbn8w6ezkqWmqCori6WgNNzoeJ1k=
+=NHaT
+-----END PGP SIGNATURE-----

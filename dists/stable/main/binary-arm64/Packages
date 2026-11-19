@@ -1,0 +1,16 @@
+Package: kernyx
+Version: 1.0.0
+Architecture: amd64
+Maintainer: Kernyx Contributors
+Filename: pool/main/kernyx_1.0.0_amd64.deb
+Size: 2291194
+MD5sum: e58db0b79d2439acac666ff6bd23bd1b
+SHA1: 8931e05ccb239de33273a1b8bf9aa80d7ad0d7dc
+SHA256: 15adbae64f59643fcbe6d2af67923071b3c8b2597131d06ad1b6dd3bf3d3383d
+Section: admin
+Priority: optional
+Description: Adaptive Linux Performance Optimization Engine
+ KERNYX detects hardware, analyzes the system, calculates appropriate
+ kernel-level optimizations, applies authorized changes transactionally,
+ verifies results and supports rollback. Includes btop, fastfetch and hyperfine.
+
