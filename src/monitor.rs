@@ -1,4 +1,5 @@
 use std::io::IsTerminal;
+use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 pub fn run() -> anyhow::Result<()> {
@@ -24,14 +25,11 @@ pub fn run() -> anyhow::Result<()> {
     ];
     for c in candidates {
         if std::path::Path::new(c).exists() {
-            let status = Command::new(c)
+            let err = Command::new(c)
                 .arg("--config")
                 .arg("/etc/kernyx/btop.conf")
-                .status()?;
-            if !status.success() {
-                return Err(anyhow::anyhow!("monitor exited with status {}", status));
-            }
-            return Ok(());
+                .exec();
+            return Err(anyhow::anyhow!("failed to launch monitor: {}", err));
         }
     }
     Err(anyhow::anyhow!(
